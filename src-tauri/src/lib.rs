@@ -80,6 +80,8 @@ pub fn run() {
 fn pick_book_folder() -> AppResult<Option<String>> {
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+
         let script = r#"
 Add-Type -AssemblyName System.Windows.Forms
 $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
@@ -91,6 +93,7 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
 "#;
         let output = std::process::Command::new("powershell.exe")
             .args(["-NoProfile", "-STA", "-Command", script])
+            .creation_flags(0x08000000)
             .output()
             .map_err(|error| format!("Failed to open folder picker: {error}"))?;
 

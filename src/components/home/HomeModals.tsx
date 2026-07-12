@@ -1,5 +1,5 @@
-import { Archive, BookOpen, Check, Copy, Database, Download, FileText, Keyboard, MessageSquare, Pencil, Plus, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Archive, BookOpen, Check, Copy, Database, Download, FileText, Keyboard, MessageSquare, Palette, Pencil, Plus, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
+import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useState } from "react";
 import {
   deleteChapterVersion,
   listChapterVersions,
@@ -48,6 +48,65 @@ const exportTemplateLabels: Record<ExportTemplate, string> = {
   "question-list": "问题清单模板",
   "annotation-index": "全书批注索引",
 };
+
+const themeOptions = [
+  {
+    value: "paper",
+    label: "纸张日间",
+    description: "暖白纸面",
+    previewBg: "#fffdf7",
+    previewInk: "#20211d",
+    accent: "#c3452b",
+  },
+  {
+    value: "daylight",
+    label: "清亮日间",
+    description: "冷白通透",
+    previewBg: "#ffffff",
+    previewInk: "#172126",
+    accent: "#126c86",
+  },
+  {
+    value: "mint",
+    label: "薄荷日间",
+    description: "柔和绿色",
+    previewBg: "#fbfffc",
+    previewInk: "#16221e",
+    accent: "#2f7c5f",
+  },
+  {
+    value: "focus",
+    label: "专注日间",
+    description: "低噪阅读",
+    previewBg: "#fbfffd",
+    previewInk: "#151b1c",
+    accent: "#226f68",
+  },
+  {
+    value: "night",
+    label: "暖黑夜读",
+    description: "暖色暗面",
+    previewBg: "#23241f",
+    previewInk: "#f1ede0",
+    accent: "#e18a62",
+  },
+  {
+    value: "midnight",
+    label: "深蓝夜读",
+    description: "蓝黑低光",
+    previewBg: "#151b22",
+    previewInk: "#e9f0f5",
+    accent: "#76b7d8",
+  },
+  {
+    value: "graphite",
+    label: "石墨夜读",
+    description: "中性深灰",
+    previewBg: "#1d1e1a",
+    previewInk: "#efefea",
+    accent: "#d8b45a",
+  },
+] as const;
 
 export function BookContextMenu({
   menu,
@@ -188,9 +247,23 @@ export function HomeSettingsModal({
 }) {
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
   const [presetDraft, setPresetDraft] = useState<ExportPresetPayload>(emptyExportPresetDraft);
+  const [recordingAction, setRecordingAction] = useState<ShortcutAction | null>(null);
   const bindings = parseShortcutBindings(settings.shortcutBindings);
   const updateBinding = (action: ShortcutAction, value: string) => {
     onChange({ shortcutBindings: JSON.stringify({ ...bindings, [action]: value.trim() }) });
+  };
+  const captureBinding = (action: ShortcutAction, event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (recordingAction !== action) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.key === "Escape") {
+      setRecordingAction(null);
+      return;
+    }
+    const value = formatShortcutFromEvent(event);
+    if (!value) return;
+    updateBinding(action, value);
+    setRecordingAction(null);
   };
   const selectedPreset =
     exportPresets.find((preset) => preset.id === editingPresetId) ?? null;
@@ -269,17 +342,60 @@ export function HomeSettingsModal({
 
         <section className="settings-section">
           <h3>
+            <Palette size={16} /> 主题
+          </h3>
+          <div className="theme-choice-grid">
+            {themeOptions.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={`theme-choice ${settings.theme === option.value ? "active" : ""}`}
+                onClick={() => onChange({ theme: option.value })}
+              >
+                <span
+                  className="theme-preview"
+                  style={{
+                    background: option.previewBg,
+                    color: option.previewInk,
+                    borderColor: option.accent,
+                  }}
+                >
+                  <i style={{ background: option.accent }} />
+                  <i />
+                </span>
+                <span>
+                  <strong>{option.label}</strong>
+                  <small>{option.description}</small>
+                </span>
+                {settings.theme === option.value && <Check size={15} />}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="settings-section">
+          <h3>
             <Keyboard size={16} /> 快捷键
           </h3>
           <div className="shortcut-grid">
             {(Object.keys(defaultShortcutBindings) as ShortcutAction[]).map((action) => (
-              <label key={action}>
-                {shortcutActionLabel(action)}
-                <input value={bindings[action]} onChange={(event) => updateBinding(action, event.target.value)} />
-              </label>
+              <div className="shortcut-field" key={action}>
+                <span>{shortcutActionLabel(action)}</span>
+                <button
+                  type="button"
+                  className={`shortcut-capture ${recordingAction === action ? "recording" : ""}`}
+                  onClick={() => setRecordingAction(action)}
+                  onKeyDown={(event) => captureBinding(action, event)}
+                  onBlur={() =>
+                    setRecordingAction((current) => (current === action ? null : current))
+                  }
+                >
+                  {recordingAction === action ? "按下新的快捷键" : bindings[action] || "未设置"}
+                </button>
+              </div>
             ))}
           </div>
-          <p className="muted">输入如 Ctrl+K、N、[ 这样的组合。冲突时后面的动作可能不会触发。</p>
+          <p className="muted">点击快捷键框后按下新的组合键。按 Esc 可取消，冲突时后面的动作可能不会触发。</p>
         </section>
 
         <section className="settings-section">
@@ -395,6 +511,24 @@ export function HomeSettingsModal({
       </section>
     </div>
   );
+}
+
+function formatShortcutFromEvent(event: ReactKeyboardEvent) {
+  const modifierKeys = new Set(["Control", "Shift", "Alt", "Meta"]);
+  if (modifierKeys.has(event.key)) return "";
+  const parts: string[] = [];
+  if (event.ctrlKey) parts.push("Ctrl");
+  if (event.altKey) parts.push("Alt");
+  if (event.shiftKey) parts.push("Shift");
+  if (event.metaKey) parts.push("Meta");
+  parts.push(readableShortcutKey(event.key));
+  return parts.join("+");
+}
+
+function readableShortcutKey(key: string) {
+  if (key === " ") return "Space";
+  if (key.length === 1) return key.toUpperCase();
+  return key;
 }
 
 export function SearchModal({

@@ -9,7 +9,8 @@ import {
   MessageSquare,
   Settings,
 } from "lucide-react";
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { type CSSProperties, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   createAnnotation,
   createExportPreset,
@@ -109,7 +110,7 @@ export default function App() {
   const [commentOnly, setCommentOnly] = useState(false);
   const [selectedNoteIds, setSelectedNoteIds] = useState<string[]>([]);
   const [workbenchChapters, setWorkbenchChapters] = useState<Chapter[]>([]);
-  const [manualPath, setManualPath] = useState("");
+  const [importDragActive, setImportDragActive] = useState(false);
   const [activeBook, setActiveBook] = useState<ReaderBook | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [reader, setReader] = useState<ReadChapterResponse | null>(null);
@@ -136,6 +137,10 @@ export default function App() {
   const [sortDragChapterId, setSortDragChapterId] = useState<string | null>(null);
   const [isLeftCollapsed, setIsLeftCollapsed] = useState(false);
   const [isRightCollapsed, setIsRightCollapsed] = useState(false);
+  const [leftPaneWidth, setLeftPaneWidth] = useState(284);
+  const [rightPaneWidth, setRightPaneWidth] = useState(344);
+  const [chapterPaneHeight, setChapterPaneHeight] = useState(320);
+  const [resizeTarget, setResizeTarget] = useState<"left" | "right" | "chapters" | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [exportTemplate, setExportTemplate] = useState<ExportTemplate>("reading-notes");
   const [exportTaskGoal, setExportTaskGoal] = useState<ExportTaskGoal>("rewrite");
@@ -150,10 +155,54 @@ export default function App() {
 
   const articleRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const readerLeftRef = useRef<HTMLElement | null>(null);
+  const importDropRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     void boot();
   }, []);
+
+  useEffect(() => {
+    if (activeBook) {
+      setImportDragActive(false);
+      return;
+    }
+
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void getCurrentWebview()
+      .onDragDropEvent((event) => {
+        const payload = event.payload;
+        if (payload.type === "enter" || payload.type === "over") {
+          setImportDragActive(isImportDropPosition(payload.position));
+          return;
+        }
+        if (payload.type === "leave") {
+          setImportDragActive(false);
+          return;
+        }
+        if (payload.type === "drop") {
+          const shouldImport = isImportDropPosition(payload.position);
+          setImportDragActive(false);
+          if (shouldImport && payload.paths[0]) {
+            void importFolderPath(payload.paths[0]);
+          }
+        }
+      })
+      .then((nextUnlisten) => {
+        if (cancelled) {
+          nextUnlisten();
+        } else {
+          unlisten = nextUnlisten;
+        }
+      })
+      .catch((err) => setError(readError(err)));
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [activeBook, busy]);
 
   useEffect(() => {
     if (!reader || pendingScroll === null) return;
@@ -310,8 +359,11 @@ export default function App() {
         "--reader-width": `${settings.contentWidth}px`,
         "--reader-padding": `${settings.pagePadding}px`,
         "--reader-paragraph-spacing": `${settings.paragraphSpacing}px`,
+        "--reader-left-width": `${leftPaneWidth}px`,
+        "--reader-right-width": `${rightPaneWidth}px`,
+        "--chapter-list-height": `${chapterPaneHeight}px`,
       }) as CSSProperties,
-    [settings],
+    [chapterPaneHeight, leftPaneWidth, rightPaneWidth, settings],
   );
 
   async function boot() {
@@ -366,17 +418,28 @@ export default function App() {
     }
   }
 
-  async function handleManualImport() {
-    if (!manualPath.trim()) return;
+  async function importFolderPath(path: string) {
+    const folderPath = path.trim();
+    if (!folderPath || busy) return;
+    setError("");
     setBusy(true);
     try {
-      await importAndOpen(manualPath.trim());
-      setManualPath("");
+      await importAndOpen(folderPath);
     } catch (err) {
       setError(readError(err));
     } finally {
       setBusy(false);
     }
+  }
+
+  function isImportDropPosition(position: { x: number; y: number }) {
+    const dropZone = importDropRef.current;
+    if (!dropZone) return false;
+    const rect = dropZone.getBoundingClientRect();
+    const scale = window.devicePixelRatio || 1;
+    const x = position.x / scale;
+    const y = position.y / scale;
+    return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
   }
 
   async function importAndOpen(path: string) {
@@ -553,6 +616,10 @@ export default function App() {
       x: Math.min(event.clientX, window.innerWidth - 156),
       y: Math.min(event.clientY, window.innerHeight - 56),
     });
+  }
+
+  function suppressNativeContextMenu(event: React.MouseEvent) {
+    event.preventDefault();
   }
 
   function buildDraftFromSelection(showError: boolean): SelectionDraft | null {
@@ -773,6 +840,80 @@ export default function App() {
       .catch((err) => setError(readError(err)));
   }
 
+  function startReaderColumnResize(
+    target: "left" | "right",
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = target === "left" ? leftPaneWidth : rightPaneWidth;
+    const siblingWidth =
+      target === "left"
+        ? isRightCollapsed ? 0 : rightPaneWidth
+        : isLeftCollapsed ? 0 : leftPaneWidth;
+    const minWidth = target === "left" ? 220 : 260;
+    const maxWidth = Math.min(
+      target === "left" ? 520 : 560,
+      window.innerWidth - siblingWidth - 480,
+    );
+
+    setResizeTarget(target);
+    document.body.classList.add("pane-resize-active", "pane-resize-column");
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const delta =
+        target === "left" ? moveEvent.clientX - startX : startX - moveEvent.clientX;
+      const nextWidth = clamp(startWidth + delta, minWidth, maxWidth);
+      if (target === "left") {
+        setLeftPaneWidth(nextWidth);
+      } else {
+        setRightPaneWidth(nextWidth);
+      }
+    };
+
+    const stopResize = () => {
+      setResizeTarget(null);
+      document.body.classList.remove("pane-resize-active", "pane-resize-column");
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopResize);
+      window.removeEventListener("pointercancel", stopResize);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
+  }
+
+  function startChapterOutlineResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0 || !readerLeftRef.current) return;
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = chapterPaneHeight;
+    const leftRect = readerLeftRef.current.getBoundingClientRect();
+    const maxHeight = leftRect.height - 76 - 42 - 42 - 8 - 140;
+
+    setResizeTarget("chapters");
+    document.body.classList.add("pane-resize-active", "pane-resize-row");
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const nextHeight = clamp(startHeight + moveEvent.clientY - startY, 120, maxHeight);
+      setChapterPaneHeight(nextHeight);
+    };
+
+    const stopResize = () => {
+      setResizeTarget(null);
+      document.body.classList.remove("pane-resize-active", "pane-resize-row");
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopResize);
+      window.removeEventListener("pointercancel", stopResize);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
+  }
+
   async function saveExportPreset(
     presetId: string | null,
     payload: ExportPresetPayload,
@@ -981,7 +1122,10 @@ export default function App() {
 
   if (!activeBook) {
     return (
-      <div className={`app-shell home-shell theme-${settings.theme} surface-${settings.surface}`}>
+      <div
+        className={`app-shell home-shell theme-${settings.theme} surface-${settings.surface}`}
+        onContextMenu={suppressNativeContextMenu}
+      >
         <TopNotice error={error} notice={notice} onClose={() => {
           setError("");
           setNotice("");
@@ -1015,29 +1159,6 @@ export default function App() {
             </button>
           </div>
         </header>
-
-        <section className="import-band">
-          <div>
-            <h2>导入一本本地书</h2>
-            <p>选择包含 `.md` 章节文件的文件夹。原文件留在原处，Loop Book 只保存索引、版本和批注。</p>
-          </div>
-          <div className="import-actions">
-            <button className="primary-button" onClick={handleChooseFolder} disabled={busy}>
-              <FolderPlus size={18} />
-              选择文件夹
-            </button>
-            <div className="manual-import">
-              <input
-                value={manualPath}
-                onChange={(event) => setManualPath(event.target.value)}
-                placeholder="或粘贴文件夹路径"
-              />
-              <button onClick={handleManualImport} disabled={busy || !manualPath.trim()}>
-                导入
-              </button>
-            </div>
-          </div>
-        </section>
 
         {homeView === "notes" ? (
           <AnnotationWorkbench
@@ -1074,27 +1195,33 @@ export default function App() {
           />
         ) : (
           <main className={`book-collection ${homeView}`}>
-            {books.length === 0 ? (
-              <div className="empty-state">
-                <BookOpen size={42} />
-                <h2>还没有书籍</h2>
-                <p>导入一个 Markdown 文件夹后，这里会显示书籍、章节数量和批注数量。</p>
-              </div>
-            ) : (
-              books.map((book) => (
-                <button
-                  key={book.id}
-                  className="book-card"
-                  onClick={() => void openBook(book)}
-                  onContextMenu={(event) => handleBookContextMenu(event, book)}
-                >
-                  <span className="book-mark" />
-                  <strong>{book.name}</strong>
-                  <span>{book.chapterCount} 章 · {book.annotationCount} 条批注</span>
-                  <small>{book.rootPath}</small>
-                </button>
-              ))
-            )}
+            {books.map((book) => (
+              <button
+                key={book.id}
+                className="book-card"
+                onClick={() => void openBook(book)}
+                onContextMenu={(event) => handleBookContextMenu(event, book)}
+              >
+                <span className="book-mark" />
+                <strong>{book.name}</strong>
+                <span>{book.chapterCount} 章 · {book.annotationCount} 条批注</span>
+                <small>{book.rootPath}</small>
+              </button>
+            ))}
+            <button
+              ref={importDropRef}
+              type="button"
+              className={`book-card import-book-card ${importDragActive ? "drag-active" : ""}`}
+              onClick={handleChooseFolder}
+              disabled={busy}
+            >
+              <span className="import-card-icon">
+                <FolderPlus size={23} />
+              </span>
+              <strong>{busy ? "正在导入" : "导入 Markdown 文件夹"}</strong>
+              <span>拖入文件夹 / 点击选择</span>
+              <small>作为画廊末尾的新书籍入口</small>
+            </button>
           </main>
         )}
 
@@ -1176,14 +1303,17 @@ export default function App() {
     <div
       className={`app-shell reader-shell theme-${settings.theme} surface-${settings.surface} ${
         isLeftCollapsed ? "left-collapsed" : ""
-      } ${isRightCollapsed ? "right-collapsed" : ""}`}
+      } ${isRightCollapsed ? "right-collapsed" : ""} ${
+        resizeTarget ? "resizing-panes" : ""
+      }`}
       style={readerStyle}
+      onContextMenu={suppressNativeContextMenu}
     >
       <TopNotice error={error} notice={notice} onClose={() => {
         setError("");
         setNotice("");
       }} />
-      <aside className="reader-left">
+      <aside className="reader-left" ref={readerLeftRef}>
         <div className="reader-bookbar">
           <button className="icon-button" title="返回首页" onClick={() => {
             setActiveBook(null);
@@ -1218,6 +1348,13 @@ export default function App() {
           ))}
         </div>
 
+        <div
+          className="reader-section-resizer"
+          role="separator"
+          aria-label="调整章节和大纲高度"
+          onPointerDown={startChapterOutlineResize}
+        />
+
         <div className="pane-header outline-heading">
           <span>大纲</span>
         </div>
@@ -1237,6 +1374,13 @@ export default function App() {
           )}
         </div>
       </aside>
+
+      <div
+        className="reader-column-resizer left-resizer"
+        role="separator"
+        aria-label="调整左栏宽度"
+        onPointerDown={(event) => startReaderColumnResize("left", event)}
+      />
 
       <main className="reader-main">
         <header className="reader-toolbar">
@@ -1301,6 +1445,13 @@ export default function App() {
           />
         </div>
       </main>
+
+      <div
+        className="reader-column-resizer right-resizer"
+        role="separator"
+        aria-label="调整右栏宽度"
+        onPointerDown={(event) => startReaderColumnResize("right", event)}
+      />
 
       <aside className="reader-right">
         <div className="pane-header">
@@ -1424,4 +1575,9 @@ export default function App() {
 function readError(err: unknown) {
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+function clamp(value: number, min: number, max: number) {
+  const upper = Math.max(min, max);
+  return Math.min(Math.max(value, min), upper);
 }
