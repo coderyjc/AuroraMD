@@ -1,4 +1,4 @@
-import { Archive, BookOpen, Check, Copy, Database, Download, Keyboard, MessageSquare, Pencil, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
+import { Archive, BookOpen, Check, Copy, Database, Download, FileText, Keyboard, MessageSquare, Pencil, Plus, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { deleteChapterVersion, listChapterVersions, listChapters, updateChapterVersionLabel } from "../../api";
 import { defaultShortcutBindings } from "../../constants";
@@ -8,6 +8,9 @@ import type {
   BookSummary,
   Chapter,
   ChapterVersion,
+  ExportPreset,
+  ExportPresetPayload,
+  ExportTemplate,
   FolderSyncReport,
   NoteItem,
   ShortcutAction,
@@ -22,6 +25,22 @@ interface ContextMenuState {
 
 export type BookMenuState = ContextMenuState & { book: BookSummary };
 export type RenameBookState = { book: BookSummary; name: string };
+
+const emptyExportPresetDraft: ExportPresetPayload = {
+  name: "",
+  baseTemplateId: "ai-pack",
+  systemPrompt:
+    "你将收到 Loop Book 导出的 Markdown 批注包。请严格基于选中文本、上下文和读者评论工作，不要编造原文不存在的信息。",
+  taskPrompt:
+    "根据批注完成下一轮修改。优先处理读者评论中明确提出的问题，并在输出中保留可追溯的章节结构。",
+};
+
+const exportTemplateLabels: Record<ExportTemplate, string> = {
+  "reading-notes": "阅读笔记模板",
+  "ai-pack": "AI 修改包模板",
+  "question-list": "问题清单模板",
+  "annotation-index": "全书批注索引",
+};
 
 export function BookContextMenu({
   menu,
@@ -138,22 +157,94 @@ export function SyncReportModal({ report, onClose }: { report: FolderSyncReport;
 
 export function HomeSettingsModal({
   settings,
+  exportPresets,
   busy,
   onChange,
   onBackupExport,
   onBackupRestore,
+  onSaveExportPreset,
+  onDeleteExportPreset,
   onClose,
 }: {
   settings: AppSettings;
+  exportPresets: ExportPreset[];
   busy: boolean;
   onChange: (patch: Partial<AppSettings>) => void;
   onBackupExport: () => void;
   onBackupRestore: () => void;
+  onSaveExportPreset: (
+    presetId: string | null,
+    payload: ExportPresetPayload,
+  ) => Promise<ExportPreset>;
+  onDeleteExportPreset: (presetId: string) => Promise<void>;
   onClose: () => void;
 }) {
+  const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
+  const [presetDraft, setPresetDraft] = useState<ExportPresetPayload>(emptyExportPresetDraft);
   const bindings = parseShortcutBindings(settings.shortcutBindings);
   const updateBinding = (action: ShortcutAction, value: string) => {
     onChange({ shortcutBindings: JSON.stringify({ ...bindings, [action]: value.trim() }) });
+  };
+  const selectedPreset =
+    exportPresets.find((preset) => preset.id === editingPresetId) ?? null;
+
+  useEffect(() => {
+    if (!editingPresetId) return;
+    const nextPreset = exportPresets.find((preset) => preset.id === editingPresetId);
+    if (!nextPreset) {
+      setEditingPresetId(null);
+      setPresetDraft(emptyExportPresetDraft);
+      return;
+    }
+    setPresetDraft({
+      name: nextPreset.name,
+      baseTemplateId: nextPreset.baseTemplateId,
+      systemPrompt: nextPreset.systemPrompt,
+      taskPrompt: nextPreset.taskPrompt,
+    });
+  }, [editingPresetId, exportPresets]);
+
+  const startNewPreset = () => {
+    setEditingPresetId(null);
+    setPresetDraft(emptyExportPresetDraft);
+  };
+
+  const selectPreset = (preset: ExportPreset) => {
+    setEditingPresetId(preset.id);
+    setPresetDraft({
+      name: preset.name,
+      baseTemplateId: preset.baseTemplateId,
+      systemPrompt: preset.systemPrompt,
+      taskPrompt: preset.taskPrompt,
+    });
+  };
+
+  const savePreset = async () => {
+    try {
+      const saved = await onSaveExportPreset(editingPresetId, {
+        ...presetDraft,
+        name: presetDraft.name.trim(),
+      });
+      setEditingPresetId(saved.id);
+      setPresetDraft({
+        name: saved.name,
+        baseTemplateId: saved.baseTemplateId,
+        systemPrompt: saved.systemPrompt,
+        taskPrompt: saved.taskPrompt,
+      });
+    } catch {
+      // App-level notice handles the user-facing error.
+    }
+  };
+
+  const deletePreset = async () => {
+    if (!editingPresetId) return;
+    try {
+      await onDeleteExportPreset(editingPresetId);
+      startNewPreset();
+    } catch {
+      // App-level notice handles the user-facing error.
+    }
   };
 
   return (
@@ -182,6 +273,103 @@ export function HomeSettingsModal({
             ))}
           </div>
           <p className="muted">输入如 Ctrl+K、N、[ 这样的组合。冲突时后面的动作可能不会触发。</p>
+        </section>
+
+        <section className="settings-section">
+          <h3>
+            <FileText size={16} /> 导出 Prompt 预设
+          </h3>
+          <div className="prompt-preset-manager">
+            <aside className="prompt-preset-list">
+              <button
+                className={!editingPresetId ? "active" : ""}
+                onClick={startNewPreset}
+              >
+                <Plus size={15} /> 新建预设
+              </button>
+              {exportPresets.map((preset) => (
+                <button
+                  key={preset.id}
+                  className={preset.id === editingPresetId ? "active" : ""}
+                  onClick={() => selectPreset(preset)}
+                >
+                  <span>{preset.name}</span>
+                  <small>{exportTemplateLabels[preset.baseTemplateId]}</small>
+                </button>
+              ))}
+            </aside>
+            <div className="prompt-preset-editor">
+              <div className="preset-editor-heading">
+                <strong>{selectedPreset ? "编辑预设" : "新建预设"}</strong>
+                {selectedPreset && <small>{new Date(selectedPreset.updatedAt).toLocaleString()}</small>}
+              </div>
+              <label className="modal-field">
+                预设名称
+                <input
+                  value={presetDraft.name}
+                  onChange={(event) =>
+                    setPresetDraft({ ...presetDraft, name: event.target.value })
+                  }
+                  placeholder="例如 发给 GPT 修改整章"
+                />
+              </label>
+              <label className="modal-field">
+                正文结构
+                <select
+                  value={presetDraft.baseTemplateId}
+                  onChange={(event) =>
+                    setPresetDraft({
+                      ...presetDraft,
+                      baseTemplateId: event.target.value as ExportTemplate,
+                    })
+                  }
+                >
+                  {(Object.keys(exportTemplateLabels) as ExportTemplate[]).map((templateId) => (
+                    <option key={templateId} value={templateId}>
+                      {exportTemplateLabels[templateId]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="modal-field">
+                系统提示词
+                <textarea
+                  value={presetDraft.systemPrompt}
+                  onChange={(event) =>
+                    setPresetDraft({ ...presetDraft, systemPrompt: event.target.value })
+                  }
+                />
+              </label>
+              <label className="modal-field">
+                任务提示词
+                <textarea
+                  value={presetDraft.taskPrompt}
+                  onChange={(event) =>
+                    setPresetDraft({ ...presetDraft, taskPrompt: event.target.value })
+                  }
+                />
+              </label>
+              <div className="modal-actions preset-editor-actions">
+                <button onClick={startNewPreset}>
+                  <Plus size={16} /> 新建
+                </button>
+                <button
+                  className="danger"
+                  onClick={() => void deletePreset()}
+                  disabled={busy || !editingPresetId}
+                >
+                  <Trash2 size={16} /> 删除
+                </button>
+                <button
+                  className="primary-button"
+                  onClick={() => void savePreset()}
+                  disabled={busy || !presetDraft.name.trim()}
+                >
+                  <Save size={16} /> 保存预设
+                </button>
+              </div>
+            </div>
+          </div>
         </section>
 
         <section className="settings-section">

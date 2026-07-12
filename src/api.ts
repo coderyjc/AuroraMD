@@ -10,6 +10,8 @@ import type {
   BookSummary,
   Chapter,
   ChapterVersion,
+  ExportPreset,
+  ExportPresetPayload,
   ExportTaskGoal,
   ExportTemplate,
   FolderSyncReport,
@@ -97,12 +99,29 @@ export async function listNoteItems() {
   return invoke<NoteItem[]>("list_note_items");
 }
 
+export async function listExportPresets() {
+  return invoke<ExportPreset[]>("list_export_presets");
+}
+
+export async function createExportPreset(payload: ExportPresetPayload) {
+  return invoke<ExportPreset>("create_export_preset", { payload });
+}
+
+export async function updateExportPreset(presetId: string, payload: ExportPresetPayload) {
+  return invoke<ExportPreset>("update_export_preset", { presetId, payload });
+}
+
+export async function deleteExportPreset(presetId: string) {
+  return invoke<void>("delete_export_preset", { presetId });
+}
+
 export async function exportAnnotations(
   scope: AnnotationScope,
   templateId: ExportTemplate,
   taskGoal?: ExportTaskGoal,
+  promptPresetId?: string,
 ) {
-  return invoke<string>("export_annotations", { scope, templateId, taskGoal });
+  return invoke<string>("export_annotations", { scope, templateId, taskGoal, promptPresetId });
 }
 
 export async function exportBackup() {

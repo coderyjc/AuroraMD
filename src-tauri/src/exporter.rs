@@ -1,10 +1,32 @@
-use crate::domain::ExportRow;
+use crate::domain::{ExportPreset, ExportRow};
 use crate::utils::now;
 
-pub fn render_export(template_id: &str, task_goal: Option<&str>, rows: &[ExportRow]) -> String {
+pub fn render_export(
+    template_id: &str,
+    task_goal: Option<&str>,
+    preset: Option<&ExportPreset>,
+    rows: &[ExportRow],
+) -> String {
     let mut out = String::new();
     out.push_str(&format!("# Loop Book Export\n\nGenerated at: {}\n\n", now()));
-    if let Some(goal) = task_goal.and_then(normalize_task_goal) {
+
+    let body_template_id = preset
+        .map(|preset| preset.base_template_id.as_str())
+        .unwrap_or(template_id);
+
+    if let Some(preset) = preset {
+        out.push_str(&format!("## Prompt Preset\n\n{}\n\n", preset.name));
+        if !preset.system_prompt.trim().is_empty() {
+            out.push_str("## AI System Instruction\n\n");
+            out.push_str(preset.system_prompt.trim());
+            out.push_str("\n\n");
+        }
+        if !preset.task_prompt.trim().is_empty() {
+            out.push_str("## Task Prompt\n\n");
+            out.push_str(preset.task_prompt.trim());
+            out.push_str("\n\n");
+        }
+    } else if let Some(goal) = task_goal.and_then(normalize_task_goal) {
         out.push_str("## AI System Instruction\n\n");
         out.push_str(ai_system_instruction(goal));
         out.push_str("\n\n");
@@ -18,7 +40,7 @@ pub fn render_export(template_id: &str, task_goal: Option<&str>, rows: &[ExportR
         return out;
     }
 
-    match template_id {
+    match body_template_id {
         "ai-pack" => {
             out.push_str("## AI Revision Packet\n\n");
             for row in rows {

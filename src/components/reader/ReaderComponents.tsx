@@ -2,7 +2,7 @@ import { Check, Copy, FileText, GripVertical, Save, Trash2, X } from "lucide-rea
 import { useEffect, useRef, useState } from "react";
 
 import { highlightColors } from "../../constants";
-import type { Annotation, AppSettings, Chapter, ExportTaskGoal, ExportTemplate } from "../../types";
+import type { Annotation, AppSettings, Chapter, ExportPreset, ExportTaskGoal, ExportTemplate } from "../../types";
 import { chapterFileName } from "../../utils/chapters";
 
 export interface SelectionDraft {
@@ -142,12 +142,15 @@ export function ExportModal({
   scope,
   template,
   taskGoal,
+  presets,
+  presetId,
   exportText,
   copied,
   busy,
   onScopeChange,
   onTemplateChange,
   onTaskGoalChange,
+  onPresetChange,
   onExport,
   onCopy,
   onClose,
@@ -155,16 +158,21 @@ export function ExportModal({
   scope: "chapter" | "book";
   template: ExportTemplate;
   taskGoal: ExportTaskGoal;
+  presets: ExportPreset[];
+  presetId: string;
   exportText: string;
   copied: boolean;
   busy: boolean;
   onScopeChange: (scope: "chapter" | "book") => void;
   onTemplateChange: (template: ExportTemplate) => void;
   onTaskGoalChange: (goal: ExportTaskGoal) => void;
+  onPresetChange: (presetId: string) => void;
   onExport: () => void;
   onCopy: () => void;
   onClose: () => void;
 }) {
+  const selectedPreset = presets.find((preset) => preset.id === presetId) ?? null;
+
   return (
     <div
       className="modal-backdrop"
@@ -193,8 +201,29 @@ export function ExportModal({
           </button>
         </div>
         <label className="modal-field">
+          Prompt 预设
+          <select value={presetId} onChange={(event) => onPresetChange(event.target.value)}>
+            <option value="">使用内置任务目标</option>
+            {presets.map((preset) => (
+              <option key={preset.id} value={preset.id}>
+                {preset.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        {selectedPreset && (
+          <div className="preset-export-summary">
+            <strong>{selectedPreset.name}</strong>
+            <span>正文结构：{exportTemplateLabel(selectedPreset.baseTemplateId)}</span>
+          </div>
+        )}
+        <label className="modal-field">
           模板
-          <select value={template} onChange={(event) => onTemplateChange(event.target.value as ExportTemplate)}>
+          <select
+            value={selectedPreset?.baseTemplateId ?? template}
+            onChange={(event) => onTemplateChange(event.target.value as ExportTemplate)}
+            disabled={Boolean(selectedPreset)}
+          >
             <option value="reading-notes">阅读笔记模板</option>
             <option value="ai-pack">AI 修改包模板</option>
             <option value="question-list">问题清单模板</option>
@@ -203,7 +232,11 @@ export function ExportModal({
         </label>
         <label className="modal-field">
           任务目标
-          <select value={taskGoal} onChange={(event) => onTaskGoalChange(event.target.value as ExportTaskGoal)}>
+          <select
+            value={taskGoal}
+            onChange={(event) => onTaskGoalChange(event.target.value as ExportTaskGoal)}
+            disabled={Boolean(selectedPreset)}
+          >
             <option value="polish">润色这一章</option>
             <option value="rewrite">根据批注重写</option>
             <option value="expand">扩展某些段落</option>
@@ -488,6 +521,16 @@ export function TopNotice({
       </button>
     </div>
   );
+}
+
+function exportTemplateLabel(templateId: ExportTemplate) {
+  const labels: Record<ExportTemplate, string> = {
+    "reading-notes": "阅读笔记模板",
+    "ai-pack": "AI 修改包模板",
+    "question-list": "问题清单模板",
+    "annotation-index": "全书批注索引",
+  };
+  return labels[templateId];
 }
 
 function ColorSwatches({

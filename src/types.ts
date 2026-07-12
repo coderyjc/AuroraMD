@@ -134,6 +134,21 @@ export type ExportTemplate = "reading-notes" | "ai-pack" | "question-list" | "an
 
 export type ExportTaskGoal = "polish" | "rewrite" | "expand" | "questions" | "creative";
 
+export interface ExportPreset {
+  id: string;
+  name: string;
+  baseTemplateId: ExportTemplate;
+  systemPrompt: string;
+  taskPrompt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ExportPresetPayload = Pick<
+  ExportPreset,
+  "name" | "baseTemplateId" | "systemPrompt" | "taskPrompt"
+>;
+
 export interface FolderSyncReport {
   added: number;
   missing: number;

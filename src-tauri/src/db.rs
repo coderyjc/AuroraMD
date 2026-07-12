@@ -88,6 +88,16 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
             border_style TEXT NOT NULL,
             shortcut_bindings TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS export_presets (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            base_template_id TEXT NOT NULL,
+            system_prompt TEXT NOT NULL,
+            task_prompt TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
         "#,
     )?;
 

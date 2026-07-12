@@ -197,6 +197,12 @@ npm.cmd run tauri -- build
 
 ### 打包与验证
 
+- 后续完成功能或修复后，默认直接执行 `npm.cmd run tauri -- build`，构建可测试的桌面 exe。用户优先打开下面这个 release 文件验证，不再只停留在前端构建或 dev server：
+
+```text
+src-tauri/target/release/loop-book.exe
+```
+
 - 常规验证顺序建议：
   1. `npm.cmd run build`
   2. `cargo check`（在 `src-tauri/` 下）
@@ -211,6 +217,7 @@ npm.cmd run tauri -- build
 ```text
 src-tauri/target/release/bundle/nsis/Loop Book_0.2.0_x64-setup.exe
 ```
+- 如果 `cargo check` 或 Tauri 打包时报错，提示去读取另一个旧目录下的 `target/.../permissions/...app_hide.toml`，通常是 Tauri/Rust 构建缓存里残留了旧绝对路径。先安全删除当前工作区内的 `src-tauri/target/release/build`，再重新执行 `npm.cmd run tauri -- build`。
 
 ## v0.2.0 功能摘要
 

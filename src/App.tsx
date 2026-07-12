@@ -13,7 +13,9 @@ import {
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import {
   createAnnotation,
+  createExportPreset,
   deleteAnnotation,
+  deleteExportPreset,
   exportAnnotations,
   exportBackup,
   getLatestReadingProgress,
@@ -21,6 +23,7 @@ import {
   importBookFolder,
   listBooks,
   listChapters,
+  listExportPresets,
   listNoteItems,
   markAnnotationsStatus,
   pickBookFolder,
@@ -32,6 +35,7 @@ import {
   syncBookFolder,
   updateBookName,
   updateAnnotation,
+  updateExportPreset,
   updateSettings,
 } from "./api";
 import { AnnotationWorkbench, type NoteFilterStatus } from "./components/home/AnnotationWorkbench";
@@ -72,6 +76,8 @@ import type {
   Book,
   BookSummary,
   Chapter,
+  ExportPreset,
+  ExportPresetPayload,
   ExportTaskGoal,
   ExportTemplate,
   FolderSyncReport,
@@ -93,6 +99,7 @@ export default function App() {
   const [books, setBooks] = useState<BookSummary[]>([]);
   const [homeView, setHomeView] = useState<"grid" | "list" | "notes">("grid");
   const [notes, setNotes] = useState<NoteItem[]>([]);
+  const [exportPresets, setExportPresets] = useState<ExportPreset[]>([]);
   const [workbenchBookId, setWorkbenchBookId] = useState("all");
   const [workbenchChapterId, setWorkbenchChapterId] = useState("all");
   const [workbenchStatus, setWorkbenchStatus] = useState<NoteFilterStatus>("all");
@@ -126,6 +133,7 @@ export default function App() {
   const [exportOpen, setExportOpen] = useState(false);
   const [exportTemplate, setExportTemplate] = useState<ExportTemplate>("reading-notes");
   const [exportTaskGoal, setExportTaskGoal] = useState<ExportTaskGoal>("rewrite");
+  const [exportPresetId, setExportPresetId] = useState("");
   const [exportScope, setExportScope] = useState<"chapter" | "book">("chapter");
   const [exportText, setExportText] = useState("");
   const [copied, setCopied] = useState(false);
@@ -289,14 +297,16 @@ export default function App() {
   async function boot() {
     setError("");
     try {
-      const [nextBooks, nextSettings, nextNotes] = await Promise.all([
+      const [nextBooks, nextSettings, nextNotes, nextExportPresets] = await Promise.all([
         listBooks(),
         getSettings(),
         listNoteItems(),
+        listExportPresets(),
       ]);
       setBooks(nextBooks);
       setSettings(nextSettings);
       setNotes(nextNotes);
+      setExportPresets(nextExportPresets);
     } catch (err) {
       setError(readError(err));
     }
@@ -310,6 +320,15 @@ export default function App() {
   async function refreshNotes() {
     const nextNotes = await listNoteItems();
     setNotes(nextNotes);
+  }
+
+  async function refreshExportPresets() {
+    const nextPresets = await listExportPresets();
+    setExportPresets(nextPresets);
+    if (exportPresetId && !nextPresets.some((preset) => preset.id === exportPresetId)) {
+      setExportPresetId("");
+    }
+    return nextPresets;
   }
 
   async function handleChooseFolder() {
@@ -637,11 +656,18 @@ export default function App() {
     setBusy(true);
     setError("");
     try {
+      const selectedPreset =
+        exportPresets.find((preset) => preset.id === exportPresetId) ?? null;
       const scope =
         exportScope === "book"
           ? { bookId: activeBook.id }
           : { chapterId: reader.chapter.id, chapterVersionId: reader.version.id };
-      const markdown = await exportAnnotations(scope, exportTemplate, exportTaskGoal);
+      const markdown = await exportAnnotations(
+        scope,
+        selectedPreset?.baseTemplateId ?? exportTemplate,
+        selectedPreset ? undefined : exportTaskGoal,
+        selectedPreset?.id,
+      );
       setExportText(markdown);
     } catch (err) {
       setError(readError(err));
@@ -666,6 +692,42 @@ export default function App() {
     void updateSettings(patch)
       .then(setSettings)
       .catch((err) => setError(readError(err)));
+  }
+
+  async function saveExportPreset(
+    presetId: string | null,
+    payload: ExportPresetPayload,
+  ): Promise<ExportPreset> {
+    setBusy(true);
+    setError("");
+    try {
+      const saved = presetId
+        ? await updateExportPreset(presetId, payload)
+        : await createExportPreset(payload);
+      await refreshExportPresets();
+      setNotice(presetId ? "导出预设已更新。" : "导出预设已创建。");
+      return saved;
+    } catch (err) {
+      setError(readError(err));
+      throw err;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeExportPreset(presetId: string) {
+    setBusy(true);
+    setError("");
+    try {
+      await deleteExportPreset(presetId);
+      await refreshExportPresets();
+      setNotice("导出预设已删除。");
+    } catch (err) {
+      setError(readError(err));
+      throw err;
+    } finally {
+      setBusy(false);
+    }
   }
 
   function handleBookContextMenu(event: React.MouseEvent, book: BookSummary) {
@@ -998,10 +1060,13 @@ export default function App() {
         {homeSettingsOpen && (
           <HomeSettingsModal
             settings={settings}
+            exportPresets={exportPresets}
             busy={busy}
             onBackupExport={() => void runBackupExport()}
             onBackupRestore={() => void runBackupRestore()}
             onChange={applySettings}
+            onSaveExportPreset={saveExportPreset}
+            onDeleteExportPreset={removeExportPreset}
             onClose={() => setHomeSettingsOpen(false)}
           />
         )}
@@ -1209,12 +1274,15 @@ export default function App() {
           scope={exportScope}
           template={exportTemplate}
           taskGoal={exportTaskGoal}
+          presets={exportPresets}
+          presetId={exportPresetId}
           exportText={exportText}
           copied={copied}
           busy={busy}
           onScopeChange={setExportScope}
           onTemplateChange={setExportTemplate}
           onTaskGoalChange={setExportTaskGoal}
+          onPresetChange={setExportPresetId}
           onExport={() => void handleExport()}
           onCopy={() => void copyExport()}
           onClose={() => setExportOpen(false)}

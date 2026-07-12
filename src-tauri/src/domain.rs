@@ -168,6 +168,27 @@ pub struct AppSettings {
     pub shortcut_bindings: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportPreset {
+    pub id: String,
+    pub name: String,
+    pub base_template_id: String,
+    pub system_prompt: String,
+    pub task_prompt: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportPresetPayload {
+    pub name: String,
+    pub base_template_id: String,
+    pub system_prompt: String,
+    pub task_prompt: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsPatch {

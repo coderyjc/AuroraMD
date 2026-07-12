@@ -59,6 +59,10 @@ pub fn run() {
             mark_annotations_status,
             list_annotations,
             list_note_items,
+            list_export_presets,
+            create_export_preset,
+            update_export_preset,
+            delete_export_preset,
             export_annotations,
             export_backup,
             restore_backup,
@@ -656,15 +660,122 @@ fn list_note_items(state: State<AppState>) -> AppResult<Vec<NoteItem>> {
 }
 
 #[tauri::command]
+fn list_export_presets(state: State<AppState>) -> AppResult<Vec<ExportPreset>> {
+    let conn = lock_conn(&state)?;
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT id, name, base_template_id, system_prompt, task_prompt, created_at, updated_at
+            FROM export_presets
+            ORDER BY updated_at DESC, created_at DESC
+            "#,
+        )
+        .map_err(db_error)?;
+    let rows = stmt
+        .query_map([], map_export_preset)
+        .map_err(db_error)?;
+    collect_rows(rows)
+}
+
+#[tauri::command]
+fn create_export_preset(
+    payload: ExportPresetPayload,
+    state: State<AppState>,
+) -> AppResult<ExportPreset> {
+    let name = payload.name.trim();
+    if name.is_empty() {
+        return Err("Preset name cannot be empty.".to_string());
+    }
+    validate_export_template(&payload.base_template_id)?;
+
+    let conn = lock_conn(&state)?;
+    let id = new_id();
+    let timestamp = now();
+    conn.execute(
+        r#"
+        INSERT INTO export_presets (
+            id, name, base_template_id, system_prompt, task_prompt, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+        "#,
+        params![
+            id,
+            name,
+            payload.base_template_id,
+            payload.system_prompt,
+            payload.task_prompt,
+            timestamp
+        ],
+    )
+    .map_err(|error| format!("Failed to create export preset: {error}"))?;
+    get_export_preset_by_id(&conn, &id)
+}
+
+#[tauri::command]
+fn update_export_preset(
+    preset_id: String,
+    payload: ExportPresetPayload,
+    state: State<AppState>,
+) -> AppResult<ExportPreset> {
+    let name = payload.name.trim();
+    if name.is_empty() {
+        return Err("Preset name cannot be empty.".to_string());
+    }
+    validate_export_template(&payload.base_template_id)?;
+
+    let conn = lock_conn(&state)?;
+    conn.execute(
+        r#"
+        UPDATE export_presets
+        SET name = ?1,
+            base_template_id = ?2,
+            system_prompt = ?3,
+            task_prompt = ?4,
+            updated_at = ?5
+        WHERE id = ?6
+        "#,
+        params![
+            name,
+            payload.base_template_id,
+            payload.system_prompt,
+            payload.task_prompt,
+            now(),
+            preset_id
+        ],
+    )
+    .map_err(|error| format!("Failed to update export preset: {error}"))?;
+    get_export_preset_by_id(&conn, &preset_id)
+}
+
+#[tauri::command]
+fn delete_export_preset(preset_id: String, state: State<AppState>) -> AppResult<()> {
+    let conn = lock_conn(&state)?;
+    conn.execute("DELETE FROM export_presets WHERE id = ?1", params![preset_id])
+        .map_err(|error| format!("Failed to delete export preset: {error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
 fn export_annotations(
     scope: AnnotationScope,
     template_id: String,
     task_goal: Option<String>,
+    prompt_preset_id: Option<String>,
     state: State<AppState>,
 ) -> AppResult<String> {
     let conn = lock_conn(&state)?;
     let rows = load_export_rows(&conn, &scope)?;
-    Ok(render_export(&template_id, task_goal.as_deref(), &rows))
+    let preset = match prompt_preset_id {
+        Some(preset_id) if !preset_id.trim().is_empty() => {
+            Some(get_export_preset_by_id(&conn, preset_id.trim())?)
+        }
+        _ => None,
+    };
+    Ok(render_export(
+        &template_id,
+        task_goal.as_deref(),
+        preset.as_ref(),
+        &rows,
+    ))
 }
 
 #[tauri::command]
@@ -713,6 +824,7 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
         DELETE FROM chapters;
         DELETE FROM books;
         DELETE FROM settings;
+        DELETE FROM export_presets;
 
         INSERT INTO books (id, name, root_path, view_mode, created_at, updated_at)
         SELECT id, name, root_path, view_mode, created_at, updated_at FROM backup.books;
@@ -749,8 +861,23 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
         PRAGMA foreign_keys = ON;
         "#,
     );
+    let preset_restore_result = if restore_result.is_ok() && backup_has_table(&conn, "export_presets")? {
+        conn.execute_batch(
+            r#"
+            INSERT INTO export_presets (
+                id, name, base_template_id, system_prompt, task_prompt, created_at, updated_at
+            )
+            SELECT
+                id, name, base_template_id, system_prompt, task_prompt, created_at, updated_at
+            FROM backup.export_presets;
+            "#,
+        )
+    } else {
+        Ok(())
+    };
     let detach_result = conn.execute_batch("DETACH DATABASE backup;");
     restore_result.map_err(|error| format!("Failed to restore backup: {error}"))?;
+    preset_restore_result.map_err(|error| format!("Failed to restore export presets: {error}"))?;
     detach_result.map_err(|error| format!("Failed to close backup database: {error}"))?;
 
     Ok(BackupResult {
@@ -880,6 +1007,24 @@ fn lock_conn<'a, 'b>(
         .conn
         .lock()
         .map_err(|_| "Database lock is poisoned.".to_string())
+}
+
+fn validate_export_template(template_id: &str) -> AppResult<()> {
+    match template_id {
+        "reading-notes" | "ai-pack" | "question-list" | "annotation-index" => Ok(()),
+        _ => Err("Unknown export template.".to_string()),
+    }
+}
+
+fn backup_has_table(conn: &Connection, table_name: &str) -> AppResult<bool> {
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM backup.sqlite_master WHERE type = 'table' AND name = ?1",
+            params![table_name],
+            |row| row.get(0),
+        )
+        .map_err(db_error)?;
+    Ok(count > 0)
 }
 
 fn sync_book_folder_inner(conn: &mut Connection, book_id: &str) -> AppResult<FolderSyncReport> {
@@ -1202,6 +1347,19 @@ fn load_chapter_versions(conn: &Connection, chapter_id: &str) -> AppResult<Vec<C
     collect_rows(rows)
 }
 
+fn get_export_preset_by_id(conn: &Connection, preset_id: &str) -> AppResult<ExportPreset> {
+    conn.query_row(
+        r#"
+        SELECT id, name, base_template_id, system_prompt, task_prompt, created_at, updated_at
+        FROM export_presets
+        WHERE id = ?1
+        "#,
+        params![preset_id],
+        map_export_preset,
+    )
+    .map_err(|error| format!("Export preset not found: {error}"))
+}
+
 fn get_annotation_by_id(conn: &Connection, annotation_id: &str) -> AppResult<Annotation> {
     conn.query_row(
         r#"
@@ -1488,6 +1646,18 @@ fn map_chapter_version(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChapterVersi
         version_number: row.get(3)?,
         label: row.get(4)?,
         created_at: row.get(5)?,
+    })
+}
+
+fn map_export_preset(row: &rusqlite::Row<'_>) -> rusqlite::Result<ExportPreset> {
+    Ok(ExportPreset {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        base_template_id: row.get(2)?,
+        system_prompt: row.get(3)?,
+        task_prompt: row.get(4)?,
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
     })
 }
 
