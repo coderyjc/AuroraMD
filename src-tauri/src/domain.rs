@@ -92,6 +92,20 @@ pub struct NoteItem {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ContentSearchResult {
+    pub book_id: String,
+    pub book_name: String,
+    pub chapter_id: String,
+    pub chapter_title: String,
+    pub chapter_version_id: String,
+    pub excerpt: String,
+    pub matched_text: String,
+    pub start_offset: i64,
+    pub end_offset: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OutlineItem {
     pub level: i64,
     pub title: String,

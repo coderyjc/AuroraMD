@@ -36,13 +36,21 @@ where
 }
 
 pub fn scan_markdown_files(root_path: &Path) -> AppResult<Vec<PathBuf>> {
-    let entries =
-        fs::read_dir(root_path).map_err(|error| format!("Failed to read book folder: {error}"))?;
     let mut md_files = Vec::new();
+    scan_markdown_files_inner(root_path, &mut md_files)?;
+    md_files.sort();
+    Ok(md_files)
+}
+
+fn scan_markdown_files_inner(folder_path: &Path, md_files: &mut Vec<PathBuf>) -> AppResult<()> {
+    let entries =
+        fs::read_dir(folder_path).map_err(|error| format!("Failed to read book folder: {error}"))?;
     for entry in entries {
         let entry = entry.map_err(|error| format!("Failed to read folder entry: {error}"))?;
         let entry_path = entry.path();
-        if entry_path.is_file()
+        if entry_path.is_dir() {
+            scan_markdown_files_inner(&entry_path, md_files)?;
+        } else if entry_path.is_file()
             && entry_path
                 .extension()
                 .and_then(|extension| extension.to_str())
@@ -56,8 +64,7 @@ pub fn scan_markdown_files(root_path: &Path) -> AppResult<Vec<PathBuf>> {
             );
         }
     }
-    md_files.sort();
-    Ok(md_files)
+    Ok(())
 }
 
 pub fn chapter_title_from_path(path: &Path, index: usize) -> String {
@@ -66,6 +73,15 @@ pub fn chapter_title_from_path(path: &Path, index: usize) -> String {
         .map(str::to_string)
         .or_else(|| path.file_stem().and_then(|stem| stem.to_str()).map(str::to_string))
         .unwrap_or_else(|| format!("Chapter {}", index + 1))
+}
+
+pub fn chapter_title_from_root(root_path: &Path, path: &Path, index: usize) -> String {
+    path.strip_prefix(root_path)
+        .ok()
+        .and_then(|relative| relative.to_str())
+        .map(|title| title.replace('\\', "/"))
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or_else(|| chapter_title_from_path(path, index))
 }
 
 pub fn chapter_file_name_from_path(path: &str) -> String {

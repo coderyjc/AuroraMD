@@ -14,7 +14,7 @@ use db::init_database;
 use domain::*;
 use exporter::render_export;
 use utils::{
-    chapter_file_name_from_path, chapter_title_from_path, collect_rows, db_error, extract_outline,
+    chapter_file_name_from_path, chapter_title_from_root, collect_rows, db_error, extract_outline,
     hash_content, new_id, now, path_to_string, repeat_placeholders, scan_markdown_files,
     validate_annotation_status,
 };
@@ -59,6 +59,7 @@ pub fn run() {
             mark_annotations_status,
             list_annotations,
             list_note_items,
+            search_book_content,
             list_export_presets,
             create_export_preset,
             update_export_preset,
@@ -212,22 +213,7 @@ fn import_book_folder(path: String, state: State<AppState>) -> AppResult<BookWit
         return Ok(BookWithChapters { book, chapters });
     }
 
-    let mut md_files = Vec::new();
-    let entries = fs::read_dir(&root_path)
-        .map_err(|error| format!("Failed to read selected folder: {error}"))?;
-    for entry in entries {
-        let entry = entry.map_err(|error| format!("Failed to read folder entry: {error}"))?;
-        let entry_path = entry.path();
-        if entry_path.is_file()
-            && entry_path
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .map(|extension| extension.eq_ignore_ascii_case("md"))
-                .unwrap_or(false)
-        {
-            md_files.push(entry_path);
-        }
-    }
+    let md_files = scan_markdown_files(&root_path)?;
 
     if md_files.is_empty() {
         return Err("No Markdown files were found in this folder.".to_string());
@@ -256,12 +242,7 @@ fn import_book_folder(path: String, state: State<AppState>) -> AppResult<BookWit
     for (index, file_path) in md_files.iter().enumerate() {
         let content = fs::read_to_string(file_path)
             .map_err(|error| format!("Failed to read {}: {error}", path_to_string(file_path)))?;
-        let title = file_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(str::to_string)
-            .or_else(|| file_path.file_stem().and_then(|stem| stem.to_str()).map(str::to_string))
-            .unwrap_or_else(|| format!("Chapter {}", index + 1));
+        let title = chapter_title_from_root(&root_path, file_path, index);
         let chapter_id = new_id();
         let version_id = new_id();
         let content_hash = hash_content(&content);
@@ -660,6 +641,93 @@ fn list_note_items(state: State<AppState>) -> AppResult<Vec<NoteItem>> {
 }
 
 #[tauri::command]
+fn search_book_content(
+    query: String,
+    limit: Option<i64>,
+    state: State<AppState>,
+) -> AppResult<Vec<ContentSearchResult>> {
+    let trimmed_query = query.trim();
+    if trimmed_query.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let result_limit = limit.unwrap_or(60).clamp(1, 200) as usize;
+    let query_lower = trimmed_query.to_lowercase();
+    let conn = lock_conn(&state)?;
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT
+                b.id,
+                b.name,
+                c.id,
+                c.title,
+                c.current_version_id,
+                v.content_snapshot
+            FROM chapters c
+            JOIN books b ON b.id = c.book_id
+            JOIN chapter_versions v ON v.id = c.current_version_id
+            WHERE c.is_missing = 0
+            ORDER BY b.updated_at DESC, c.sort_index ASC, c.created_at ASC
+            "#,
+        )
+        .map_err(db_error)?;
+    let mut rows = stmt.query([]).map_err(db_error)?;
+    let mut results = Vec::new();
+
+    while let Some(row) = rows.next().map_err(db_error)? {
+        let book_id: String = row.get(0).map_err(db_error)?;
+        let book_name: String = row.get(1).map_err(db_error)?;
+        let chapter_id: String = row.get(2).map_err(db_error)?;
+        let chapter_title: String = row.get(3).map_err(db_error)?;
+        let chapter_version_id: String = row.get(4).map_err(db_error)?;
+        let content: String = row.get(5).map_err(db_error)?;
+        let (content_lower, lower_to_original) = lowercase_with_byte_map(&content);
+
+        let mut search_from = 0usize;
+        let mut matches_in_chapter = 0usize;
+        while search_from <= content_lower.len() {
+            let Some(relative_index) = content_lower[search_from..].find(&query_lower) else {
+                break;
+            };
+            let lower_start = search_from + relative_index;
+            let lower_end = lower_start + query_lower.len();
+            let original_start = original_byte_from_lower(&lower_to_original, lower_start, content.len());
+            let original_end = original_byte_from_lower(&lower_to_original, lower_end, content.len());
+            if original_start <= original_end
+                && original_end <= content.len()
+                && content.is_char_boundary(original_start)
+                && content.is_char_boundary(original_end)
+            {
+                let matched_text = content[original_start..original_end].to_string();
+                results.push(ContentSearchResult {
+                    book_id: book_id.clone(),
+                    book_name: book_name.clone(),
+                    chapter_id: chapter_id.clone(),
+                    chapter_title: chapter_title.clone(),
+                    chapter_version_id: chapter_version_id.clone(),
+                    excerpt: build_search_excerpt(&content, original_start, original_end),
+                    matched_text,
+                    start_offset: byte_to_utf16_offset(&content, original_start),
+                    end_offset: byte_to_utf16_offset(&content, original_end),
+                });
+                if results.len() >= result_limit {
+                    return Ok(results);
+                }
+            }
+
+            matches_in_chapter += 1;
+            if matches_in_chapter >= 8 {
+                break;
+            }
+            search_from = lower_end.max(lower_start + 1);
+        }
+    }
+
+    Ok(results)
+}
+
+#[tauri::command]
 fn list_export_presets(state: State<AppState>) -> AppResult<Vec<ExportPreset>> {
     let conn = lock_conn(&state)?;
     let mut stmt = conn
@@ -1027,6 +1095,52 @@ fn backup_has_table(conn: &Connection, table_name: &str) -> AppResult<bool> {
     Ok(count > 0)
 }
 
+fn lowercase_with_byte_map(content: &str) -> (String, Vec<usize>) {
+    let mut lowered = String::new();
+    let mut lower_to_original = Vec::new();
+    for (byte_index, character) in content.char_indices() {
+        for lower_character in character.to_lowercase() {
+            let mut buffer = [0; 4];
+            let encoded = lower_character.encode_utf8(&mut buffer);
+            lowered.push_str(encoded);
+            for _ in 0..encoded.len() {
+                lower_to_original.push(byte_index);
+            }
+        }
+    }
+    lower_to_original.push(content.len());
+    (lowered, lower_to_original)
+}
+
+fn original_byte_from_lower(map: &[usize], lower_byte_index: usize, content_len: usize) -> usize {
+    map.get(lower_byte_index).copied().unwrap_or(content_len)
+}
+
+fn byte_to_utf16_offset(content: &str, byte_index: usize) -> i64 {
+    content[..byte_index].encode_utf16().count() as i64
+}
+
+fn build_search_excerpt(content: &str, start_byte: usize, end_byte: usize) -> String {
+    let before_chars = content[..start_byte]
+        .chars()
+        .rev()
+        .take(48)
+        .collect::<Vec<_>>();
+    let before = before_chars.into_iter().rev().collect::<String>();
+    let matched = &content[start_byte..end_byte];
+    let after = content[end_byte..].chars().take(72).collect::<String>();
+    let prefix = if start_byte > 0 { "..." } else { "" };
+    let suffix = if end_byte < content.len() { "..." } else { "" };
+    collapse_excerpt_whitespace(&format!("{prefix}{before}{matched}{after}{suffix}"))
+}
+
+fn collapse_excerpt_whitespace(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn sync_book_folder_inner(conn: &mut Connection, book_id: &str) -> AppResult<FolderSyncReport> {
     let book = get_book_by_id(conn, book_id)?;
     let root_path = PathBuf::from(&book.root_path);
@@ -1093,7 +1207,7 @@ fn sync_book_folder_inner(conn: &mut Connection, book_id: &str) -> AppResult<Fol
             .position(|(_, _, _, hash)| *hash == current_version.content_hash)
         {
             let (file_path, file_path_text, _, _) = file_candidates.remove(index);
-            let title = chapter_title_from_path(&file_path, report.added as usize);
+            let title = chapter_title_from_root(&root_path, &file_path, report.added as usize);
             conn.execute(
                 r#"
                 UPDATE chapters
@@ -1133,7 +1247,7 @@ fn sync_book_folder_inner(conn: &mut Connection, book_id: &str) -> AppResult<Fol
     {
         let chapter_id = new_id();
         let version_id = new_id();
-        let title = chapter_title_from_path(&file_path, index);
+        let title = chapter_title_from_root(&root_path, &file_path, index);
         conn.execute(
             r#"
             INSERT INTO chapters (

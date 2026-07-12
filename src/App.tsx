@@ -66,6 +66,7 @@ import {
   getContext,
   getHeadingPath,
   renderMarkdownWithAnnotations,
+  type SearchHighlight,
 } from "./markdown";
 import type {
   Annotation,
@@ -76,6 +77,7 @@ import type {
   Book,
   BookSummary,
   Chapter,
+  ContentSearchResult,
   ExportPreset,
   ExportPresetPayload,
   ExportTaskGoal,
@@ -125,6 +127,9 @@ export default function App() {
   const [pendingDraft, setPendingDraft] = useState<SelectionDraft | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
+  const [activeSearchHighlight, setActiveSearchHighlight] = useState<
+    (SearchHighlight & { chapterVersionId: string }) | null
+  >(null);
   const [sortOpen, setSortOpen] = useState(false);
   const [sortDraft, setSortDraft] = useState<Chapter[]>([]);
   const [sortDragChapterId, setSortDragChapterId] = useState<string | null>(null);
@@ -235,14 +240,24 @@ export default function App() {
     return () => window.cancelAnimationFrame(frame);
   }, [activeAnnotationId, reader]);
 
+  useEffect(() => {
+    if (!reader || !activeSearchHighlight || !articleRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      const mark = articleRef.current?.querySelector<HTMLElement>("[data-search-hit='true']");
+      mark?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeSearchHighlight, reader]);
+
   const renderedHtml = useMemo(() => {
     if (!reader) return "";
     return renderMarkdownWithAnnotations(
       reader.content,
       reader.annotations,
       reader.chapter.filePath,
+      activeSearchHighlight?.chapterVersionId === reader.version.id ? activeSearchHighlight : null,
     );
-  }, [reader]);
+  }, [activeSearchHighlight, reader]);
 
   const activeAnnotation = useMemo(() => {
     if (!reader || !activeAnnotationId) return null;
@@ -376,6 +391,7 @@ export default function App() {
     setExportOpen(false);
     setSortOpen(false);
     setDraft(null);
+    setActiveSearchHighlight(null);
     try {
       const nextChapters = await listChapters(book.id);
       if (!nextChapters.length) {
@@ -409,6 +425,7 @@ export default function App() {
     setExportText("");
     setExportOpen(false);
     setSortOpen(false);
+    setActiveSearchHighlight(null);
     try {
       const nextChapters = await listChapters(note.bookId);
       const nextReader = await readChapterVersion(note.chapterVersionId).catch(() =>
@@ -438,10 +455,54 @@ export default function App() {
     }
   }
 
+  async function openContentSearchResult(result: ContentSearchResult) {
+    setBusy(true);
+    setError("");
+    setDraft(null);
+    setExportText("");
+    setExportOpen(false);
+    setSortOpen(false);
+    setSearchOpen(false);
+    setActiveAnnotationId(null);
+    try {
+      const nextChapters = await listChapters(result.bookId);
+      const nextReader = await readChapterVersion(result.chapterVersionId).catch(() =>
+        readChapter(result.chapterId),
+      );
+      const book = books.find((item) => item.id === result.bookId);
+      setActiveBook(
+        book ?? {
+          id: result.bookId,
+          name: result.bookName,
+          rootPath: "",
+          viewMode: "grid",
+          createdAt: "",
+          updatedAt: "",
+          chapterCount: nextChapters.length,
+          annotationCount: notes.filter((item) => item.bookId === result.bookId).length,
+        },
+      );
+      setChapters(nextChapters);
+      setReader(nextReader);
+      setActiveSearchHighlight({
+        chapterVersionId: result.chapterVersionId,
+        startOffset: result.startOffset,
+        endOffset: result.endOffset,
+        matchedText: result.matchedText,
+      });
+      setPendingScroll(null);
+    } catch (err) {
+      setError(readError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function selectChapter(chapterId: string) {
     setBusy(true);
     setDraft(null);
     setExportText("");
+    setActiveSearchHighlight(null);
     try {
       const nextReader = await readChapter(chapterId);
       setReader(nextReader);
@@ -456,6 +517,7 @@ export default function App() {
   async function selectVersion(chapterVersionId: string) {
     setBusy(true);
     setDraft(null);
+    setActiveSearchHighlight(null);
     try {
       const nextReader = await readChapterVersion(chapterVersionId);
       setReader(nextReader);
@@ -1085,6 +1147,7 @@ export default function App() {
               setSearchOpen(false);
               void openNote(note);
             }}
+            onOpenContentResult={(result) => void openContentSearchResult(result)}
           />
         )}
         {batchExportOpen && (
@@ -1310,6 +1373,7 @@ export default function App() {
             setSearchOpen(false);
             void openNote(note);
           }}
+          onOpenContentResult={(result) => void openContentSearchResult(result)}
         />
       )}
       {contextMenu && pendingDraft && (

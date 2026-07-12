@@ -2,6 +2,12 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import MarkdownIt from "markdown-it";
 import type { Annotation } from "./types";
 
+export interface SearchHighlight {
+  startOffset: number;
+  endOffset: number;
+  matchedText: string;
+}
+
 const md = new MarkdownIt({
   html: true,
   linkify: true,
@@ -26,8 +32,9 @@ export function renderMarkdownWithAnnotations(
   content: string,
   annotations: Annotation[],
   chapterFilePath: string,
+  searchHighlight?: SearchHighlight | null,
 ) {
-  const marked = applyAnnotationMarks(content, annotations);
+  const marked = applyAnnotationMarks(content, annotations, searchHighlight);
   return md.render(marked, { chapterFilePath });
 }
 
@@ -92,8 +99,12 @@ export function getHeadingPath(content: string, offset: number) {
   return stack.map((heading) => heading.title).join(" > ");
 }
 
-function applyAnnotationMarks(content: string, annotations: Annotation[]) {
-  const usable = annotations
+function applyAnnotationMarks(
+  content: string,
+  annotations: Annotation[],
+  searchHighlight?: SearchHighlight | null,
+) {
+  const ranges = annotations
     .filter((annotation) => {
       const start = annotation.startOffset;
       const end = annotation.endOffset;
@@ -104,16 +115,45 @@ function applyAnnotationMarks(content: string, annotations: Annotation[]) {
         content.slice(start, end) === annotation.selectedText
       );
     })
-    .sort((a, b) => b.startOffset - a.startOffset);
+    .map((annotation) => ({
+      startOffset: annotation.startOffset,
+      endOffset: annotation.endOffset,
+      open: `<mark class="annotation-mark" style="--mark-color: ${escapeAttribute(annotation.highlightColor || "#f5d76e")};" data-annotation-id="${escapeAttribute(annotation.id)}">`,
+      close: "</mark>",
+    }));
+
+  if (
+    searchHighlight &&
+    searchHighlight.startOffset >= 0 &&
+    searchHighlight.endOffset > searchHighlight.startOffset &&
+    searchHighlight.endOffset <= content.length &&
+    content.slice(searchHighlight.startOffset, searchHighlight.endOffset) ===
+      searchHighlight.matchedText &&
+    !ranges.some(
+      (range) =>
+        searchHighlight.startOffset < range.endOffset &&
+        searchHighlight.endOffset > range.startOffset,
+    )
+  ) {
+    ranges.push({
+      startOffset: searchHighlight.startOffset,
+      endOffset: searchHighlight.endOffset,
+      open: '<mark class="search-hit-mark" data-search-hit="true">',
+      close: "</mark>",
+    });
+  }
+
+  ranges.sort((a, b) => {
+    if (a.startOffset !== b.startOffset) return b.startOffset - a.startOffset;
+    return a.endOffset - b.endOffset;
+  });
 
   let output = content;
-  for (const annotation of usable) {
-    const color = escapeAttribute(annotation.highlightColor || "#f5d76e");
-    const id = escapeAttribute(annotation.id);
-    output = `${output.slice(0, annotation.startOffset)}<mark class="annotation-mark" style="--mark-color: ${color};" data-annotation-id="${id}">${output.slice(
-      annotation.startOffset,
-      annotation.endOffset,
-    )}</mark>${output.slice(annotation.endOffset)}`;
+  for (const range of ranges) {
+    output = `${output.slice(0, range.startOffset)}${range.open}${output.slice(
+      range.startOffset,
+      range.endOffset,
+    )}${range.close}${output.slice(range.endOffset)}`;
   }
 
   return output;

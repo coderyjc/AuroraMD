@@ -1,6 +1,12 @@
 import { Archive, BookOpen, Check, Copy, Database, Download, FileText, Keyboard, MessageSquare, Pencil, Plus, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { deleteChapterVersion, listChapterVersions, listChapters, updateChapterVersionLabel } from "../../api";
+import {
+  deleteChapterVersion,
+  listChapterVersions,
+  listChapters,
+  searchBookContent,
+  updateChapterVersionLabel,
+} from "../../api";
 import { defaultShortcutBindings } from "../../constants";
 import type {
   AppSettings,
@@ -8,6 +14,7 @@ import type {
   BookSummary,
   Chapter,
   ChapterVersion,
+  ContentSearchResult,
   ExportPreset,
   ExportPresetPayload,
   ExportTemplate,
@@ -398,6 +405,7 @@ export function SearchModal({
   onClose,
   onOpenBook,
   onOpenNote,
+  onOpenContentResult,
 }: {
   query: string;
   books: BookSummary[];
@@ -406,7 +414,11 @@ export function SearchModal({
   onClose: () => void;
   onOpenBook: (book: BookSummary) => void;
   onOpenNote: (note: NoteItem) => void;
+  onOpenContentResult: (result: ContentSearchResult) => void;
 }) {
+  const [contentResults, setContentResults] = useState<ContentSearchResult[]>([]);
+  const [contentSearchBusy, setContentSearchBusy] = useState(false);
+  const [contentSearchError, setContentSearchError] = useState("");
   const normalized = query.trim().toLowerCase();
   const matchedBooks = normalized
     ? books.filter((book) => `${book.name} ${book.rootPath}`.toLowerCase().includes(normalized))
@@ -417,12 +429,43 @@ export function SearchModal({
       )
     : notes.slice(0, 8);
 
+  useEffect(() => {
+    const searchText = query.trim();
+    if (searchText.length < 2) {
+      setContentResults([]);
+      setContentSearchBusy(false);
+      setContentSearchError("");
+      return;
+    }
+
+    let cancelled = false;
+    setContentSearchBusy(true);
+    setContentSearchError("");
+    const timer = window.setTimeout(() => {
+      void searchBookContent(searchText)
+        .then((results) => {
+          if (!cancelled) setContentResults(results);
+        })
+        .catch((err) => {
+          if (!cancelled) setContentSearchError(readError(err));
+        })
+        .finally(() => {
+          if (!cancelled) setContentSearchBusy(false);
+        });
+    }, 180);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [query]);
+
   return (
     <div className="modal-backdrop search-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="search-modal" onMouseDown={(event) => event.stopPropagation()}>
         <div className="search-box">
           <Search size={18} />
-          <input value={query} onChange={(event) => onQueryChange(event.target.value)} autoFocus placeholder="搜索书籍、批注、选中文本" />
+          <input value={query} onChange={(event) => onQueryChange(event.target.value)} autoFocus placeholder="搜索书籍、批注、正文" />
           <button className="icon-button small" onClick={onClose}>
             <X size={14} />
           </button>
@@ -440,6 +483,23 @@ export function SearchModal({
               <MessageSquare size={15} /> <span>{note.comment.trim() || note.selectedText}</span>
             </button>
           ))}
+          <h3>正文 {contentSearchBusy ? "搜索中" : contentResults.length ? contentResults.length : ""}</h3>
+          {contentSearchError && <p className="search-error">{contentSearchError}</p>}
+          {!contentSearchError &&
+            contentResults.map((result, index) => (
+              <button
+                key={`${result.chapterVersionId}-${result.startOffset}-${index}`}
+                className="content-search-result"
+                onClick={() => onOpenContentResult(result)}
+              >
+                <FileText size={15} />
+                <span>
+                  <strong>{result.chapterTitle}</strong>
+                  <small>{result.bookName}</small>
+                  <em>{result.excerpt}</em>
+                </span>
+              </button>
+            ))}
         </div>
       </section>
     </div>

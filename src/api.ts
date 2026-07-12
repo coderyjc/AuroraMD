@@ -10,6 +10,7 @@ import type {
   BookSummary,
   Chapter,
   ChapterVersion,
+  ContentSearchResult,
   ExportPreset,
   ExportPresetPayload,
   ExportTaskGoal,
@@ -97,6 +98,10 @@ export async function listAnnotations(scope: AnnotationScope) {
 
 export async function listNoteItems() {
   return invoke<NoteItem[]>("list_note_items");
+}
+
+export async function searchBookContent(query: string, limit = 60) {
+  return invoke<ContentSearchResult[]>("search_book_content", { query, limit });
 }
 
 export async function listExportPresets() {

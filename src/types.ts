@@ -70,6 +70,18 @@ export interface NoteItem {
   updatedAt: string;
 }
 
+export interface ContentSearchResult {
+  bookId: string;
+  bookName: string;
+  chapterId: string;
+  chapterTitle: string;
+  chapterVersionId: string;
+  excerpt: string;
+  matchedText: string;
+  startOffset: number;
+  endOffset: number;
+}
+
 export interface OutlineItem {
   level: number;
   title: string;
