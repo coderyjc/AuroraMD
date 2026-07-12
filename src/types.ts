@@ -19,6 +19,7 @@ export interface Chapter {
   title: string;
   sortIndex: number;
   currentVersionId: string;
+  isMissing: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -28,8 +29,11 @@ export interface ChapterVersion {
   chapterId: string;
   contentHash: string;
   versionNumber: number;
+  label: string;
   createdAt: string;
 }
+
+export type AnnotationStatus = "pending" | "processed" | "exported" | "ignored";
 
 export interface Annotation {
   id: string;
@@ -45,6 +49,7 @@ export interface Annotation {
   highlightColor: string;
   comment: string;
   tags: string;
+  status: AnnotationStatus;
   createdAt: string;
   updatedAt: string;
 }
@@ -60,6 +65,7 @@ export interface NoteItem {
   headingPath: string;
   highlightColor: string;
   comment: string;
+  status: AnnotationStatus;
   createdAt: string;
   updatedAt: string;
 }
@@ -91,6 +97,7 @@ export interface AppSettings {
   paragraphSpacing: number;
   surface: string;
   borderStyle: string;
+  shortcutBindings: string;
 }
 
 export interface AnnotationPayload {
@@ -112,6 +119,7 @@ export interface AnnotationScope {
   bookId?: string;
   chapterId?: string;
   chapterVersionId?: string;
+  annotationIds?: string[];
 }
 
 export interface ReadingProgress {
@@ -123,3 +131,29 @@ export interface ReadingProgress {
 }
 
 export type ExportTemplate = "reading-notes" | "ai-pack" | "question-list" | "annotation-index";
+
+export type ExportTaskGoal = "polish" | "rewrite" | "expand" | "questions" | "creative";
+
+export interface FolderSyncReport {
+  added: number;
+  missing: number;
+  changed: number;
+  renamed: number;
+  unchanged: number;
+  messages: string[];
+}
+
+export interface BackupResult {
+  path: string;
+}
+
+export type ShortcutAction =
+  | "search"
+  | "nextChapter"
+  | "previousChapter"
+  | "highlight"
+  | "export"
+  | "toggleLeft"
+  | "toggleRight";
+
+export type ShortcutBindings = Record<ShortcutAction, string>;

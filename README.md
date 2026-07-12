@@ -34,13 +34,22 @@ Loop Book 是一个本地优先的 Markdown 桌面阅读器，用来阅读按章
 ```text
 .
 |-- src/                  # React 前端
-|   |-- App.tsx           # 主界面和交互流程
+|   |-- App.tsx           # 应用状态、页面编排和主要交互流程
 |   |-- api.ts            # Tauri invoke API 封装
+|   |-- constants.ts      # 默认设置、快捷键、高亮颜色等常量
 |   |-- markdown.ts       # Markdown 渲染、批注标记、标题路径工具
 |   |-- styles.css        # 应用样式
-|   `-- types.ts          # 前后端共享的 TypeScript 类型
+|   |-- types.ts          # 前后端共享的 TypeScript 类型
+|   |-- components/
+|   |   |-- home/         # 首页批注工作台、设置、搜索、书籍菜单等组件
+|   |   `-- reader/       # 阅读器批注卡片、导出、排序、设置等组件
+|   `-- utils/            # 章节、批注、快捷键等前端工具函数
 |-- src-tauri/            # Tauri/Rust 后端
-|   |-- src/lib.rs        # 数据库、导入、章节、批注、导出等命令
+|   |-- src/lib.rs        # Tauri commands 和业务编排
+|   |-- src/domain.rs     # 后端数据模型和 DTO
+|   |-- src/db.rs         # SQLite 初始化与迁移
+|   |-- src/exporter.rs   # 批注导出模板渲染
+|   |-- src/utils.rs      # 文件扫描、hash、时间、ID、大纲等工具
 |   |-- src/main.rs       # 桌面入口
 |   |-- Cargo.toml        # Rust 依赖
 |   `-- tauri.conf.json   # Tauri 应用配置
@@ -49,6 +58,21 @@ Loop Book 是一个本地优先的 Markdown 桌面阅读器，用来阅读按章
 |-- tsconfig.json
 `-- vite.config.ts
 ```
+
+## 代码分层说明
+
+当前代码按“命令编排、领域模型、基础设施、展示组件、工具函数”拆分：
+
+- `src/App.tsx` 负责应用级状态、页面路由式切换、Tauri API 调用和事件编排。
+- `src/components/home/` 放首页相关 UI，包括批注工作台、书籍右键菜单、搜索、批量导出、版本管理和主页设置。
+- `src/components/reader/` 放阅读器相关 UI，包括章节排序弹窗、批注创建/详情弹窗、导出弹窗、阅读器设置和顶部通知。
+- `src/utils/` 放前端纯工具函数，避免把章节名、批注状态、快捷键解析等逻辑散落在组件里。
+- `src-tauri/src/domain.rs` 定义 Rust 侧统一数据结构，尽量让命令函数只处理流程，不重复写 DTO。
+- `src-tauri/src/db.rs` 负责数据库建表与迁移，避免 schema 逻辑继续堆在 `lib.rs`。
+- `src-tauri/src/exporter.rs` 专注导出 Markdown/AI 包模板，后续新增导出格式优先改这里。
+- `src-tauri/src/utils.rs` 放后端通用工具，例如扫描 `.md`、计算 hash、生成 ID、解析大纲和数据库错误格式化。
+
+后续新增功能时，优先沿用这个边界：UI 组件不直接写复杂业务规则，命令层不直接堆模板字符串，数据库 schema 变更集中放在 `db.rs`。
 
 ## 环境要求
 
@@ -178,8 +202,24 @@ npm.cmd run tauri -- build
   2. `cargo check`（在 `src-tauri/` 下）
   3. `cargo test`（在 `src-tauri/` 下）
   4. `npm.cmd run tauri -- build`
+- 最近一次模块拆分后已通过：
+  - `npm.cmd run build`
+  - `cargo check`
+  - `cargo test`
 - Windows 安装包输出位置通常是：
 
 ```text
-src-tauri/target/release/bundle/nsis/Loop Book_0.1.0_x64-setup.exe
+src-tauri/target/release/bundle/nsis/Loop Book_0.2.0_x64-setup.exe
 ```
+
+## v0.2.0 功能摘要
+
+- 首页新增批注工作台：支持按书、章节、状态筛选，支持只看有评论批注、批量选择、批量导出、批量标记状态。
+- 首页 gallery/list 书籍卡片支持右键菜单：重命名书籍、同步文件夹、打开版本管理。
+- 同步文件夹支持检测新增章节、缺失章节、内容变更和疑似改名；内容变更会继续按章节生成 v2/v3 版本快照。
+- 章节版本管理支持按书选择章节、查看版本列表、给版本添加别名、删除非当前版本。
+- 导出功能增加任务目标：润色这一章、根据批注重写、扩展段落、生成问题清单、生成二次创作指令；导出 Markdown 会自动包含给 AI 的系统说明。
+- 首页设置与阅读器设置分离：主页设置使用模态框，包含快捷键绑定和本地备份/恢复；阅读器设置继续保留字体、行距、边距、主题等阅读体验设置。
+- 新增默认快捷键：`Ctrl+K` 搜索、`N` 下一章、`P` 上一章、`H` 添加高亮、`E` 导出、`[`/`]` 收起展开左右栏。
+- 本地备份/恢复支持导出和恢复 SQLite 数据库备份文件。
+- 增加右键菜单、模态框、搜索框、侧栏/弹窗等轻量 UI 动画。

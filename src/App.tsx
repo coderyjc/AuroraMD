@@ -1,40 +1,62 @@
 import {
   ArrowLeft,
   BookOpen,
-  Check,
-  Copy,
   Download,
   FileText,
   FolderPlus,
   Grid3X3,
-  GripVertical,
   Highlighter,
   LayoutList,
   MessageSquare,
-  Save,
   Settings,
-  Trash2,
-  X,
 } from "lucide-react";
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import {
   createAnnotation,
   deleteAnnotation,
   exportAnnotations,
+  exportBackup,
   getLatestReadingProgress,
   getSettings,
   importBookFolder,
   listBooks,
   listChapters,
   listNoteItems,
+  markAnnotationsStatus,
   pickBookFolder,
   readChapter,
   readChapterVersion,
   reorderChapters,
+  restoreBackup,
   saveReadingProgress,
+  syncBookFolder,
+  updateBookName,
   updateAnnotation,
   updateSettings,
 } from "./api";
+import { AnnotationWorkbench, type NoteFilterStatus } from "./components/home/AnnotationWorkbench";
+import {
+  BatchExportModal,
+  BookContextMenu,
+  type BookMenuState,
+  HomeSettingsModal,
+  RenameBookModal,
+  type RenameBookState,
+  SearchModal,
+  SyncReportModal,
+  VersionManagerModal,
+} from "./components/home/HomeModals";
+import {
+  AnnotationCard,
+  AnnotationDetailModal,
+  ExportModal,
+  NewAnnotationModal,
+  SettingsPanel,
+  SortChaptersModal,
+  TopNotice,
+  type SelectionDraft,
+} from "./components/reader/ReaderComponents";
+import { defaultSettings, highlightColors } from "./constants";
 import {
   findSelectionOffset,
   getContext,
@@ -44,37 +66,21 @@ import {
 import type {
   Annotation,
   AnnotationPayload,
+  AnnotationStatus,
   AppSettings,
+  BackupResult,
   Book,
   BookSummary,
   Chapter,
+  ExportTaskGoal,
   ExportTemplate,
+  FolderSyncReport,
   NoteItem,
   ReadChapterResponse,
+  ShortcutAction,
 } from "./types";
-
-const highlightColors = ["#f7d86a", "#83d9b7", "#f2a0a1", "#9db7ff", "#d7b7ff"];
-
-const defaultSettings: AppSettings = {
-  annotationContextChars: 100,
-  theme: "paper",
-  fontFamily: "Literata, Georgia, serif",
-  fontSize: 18,
-  lineHeight: 1.72,
-  contentWidth: 820,
-  pagePadding: 52,
-  paragraphSpacing: 18,
-  surface: "warm",
-  borderStyle: "hairline",
-};
-
-interface SelectionDraft {
-  selectedText: string;
-  startOffset: number;
-  endOffset: number;
-  highlightColor: string;
-  comment: string;
-}
+import { chapterFileName } from "./utils/chapters";
+import { matchShortcut, parseShortcutBindings, shouldIgnoreShortcut } from "./utils/shortcuts";
 
 interface ContextMenuState {
   x: number;
@@ -87,12 +93,27 @@ export default function App() {
   const [books, setBooks] = useState<BookSummary[]>([]);
   const [homeView, setHomeView] = useState<"grid" | "list" | "notes">("grid");
   const [notes, setNotes] = useState<NoteItem[]>([]);
+  const [workbenchBookId, setWorkbenchBookId] = useState("all");
+  const [workbenchChapterId, setWorkbenchChapterId] = useState("all");
+  const [workbenchStatus, setWorkbenchStatus] = useState<NoteFilterStatus>("all");
+  const [commentOnly, setCommentOnly] = useState(false);
+  const [selectedNoteIds, setSelectedNoteIds] = useState<string[]>([]);
+  const [workbenchChapters, setWorkbenchChapters] = useState<Chapter[]>([]);
   const [manualPath, setManualPath] = useState("");
   const [activeBook, setActiveBook] = useState<ReaderBook | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [reader, setReader] = useState<ReadChapterResponse | null>(null);
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
+  const [homeSettingsOpen, setHomeSettingsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [bookMenu, setBookMenu] = useState<BookMenuState | null>(null);
+  const [renameBookDraft, setRenameBookDraft] = useState<RenameBookState | null>(null);
+  const [syncReport, setSyncReport] = useState<FolderSyncReport | null>(null);
+  const [versionManagerBook, setVersionManagerBook] = useState<BookSummary | null>(null);
+  const [batchExportOpen, setBatchExportOpen] = useState(false);
+  const [batchExportText, setBatchExportText] = useState("");
   const [draft, setDraft] = useState<SelectionDraft | null>(null);
   const [pendingDraft, setPendingDraft] = useState<SelectionDraft | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -104,6 +125,7 @@ export default function App() {
   const [isRightCollapsed, setIsRightCollapsed] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [exportTemplate, setExportTemplate] = useState<ExportTemplate>("reading-notes");
+  const [exportTaskGoal, setExportTaskGoal] = useState<ExportTaskGoal>("rewrite");
   const [exportScope, setExportScope] = useState<"chapter" | "book">("chapter");
   const [exportText, setExportText] = useState("");
   const [copied, setCopied] = useState(false);
@@ -140,6 +162,37 @@ export default function App() {
       window.removeEventListener("scroll", close, true);
     };
   }, [contextMenu]);
+
+  useEffect(() => {
+    if (!bookMenu) return;
+    const close = () => setBookMenu(null);
+    window.addEventListener("click", close);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [bookMenu]);
+
+  useEffect(() => {
+    if (workbenchBookId === "all") {
+      setWorkbenchChapters([]);
+      setWorkbenchChapterId("all");
+      return;
+    }
+
+    let cancelled = false;
+    void listChapters(workbenchBookId)
+      .then((nextChapters) => {
+        if (!cancelled) setWorkbenchChapters(nextChapters);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(readError(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workbenchBookId]);
 
   useEffect(() => {
     if (!reader || !activeBook || !scrollRef.current) return;
@@ -187,6 +240,38 @@ export default function App() {
     if (!reader || !activeAnnotationId) return null;
     return reader.annotations.find((annotation) => annotation.id === activeAnnotationId) ?? null;
   }, [activeAnnotationId, reader]);
+
+  const shortcutBindings = useMemo(
+    () => parseShortcutBindings(settings.shortcutBindings),
+    [settings.shortcutBindings],
+  );
+
+  const filteredNotes = useMemo(() => {
+    return notes.filter((note) => {
+      if (workbenchBookId !== "all" && note.bookId !== workbenchBookId) return false;
+      if (workbenchChapterId !== "all" && note.chapterId !== workbenchChapterId) return false;
+      if (workbenchStatus !== "all" && note.status !== workbenchStatus) return false;
+      if (commentOnly && !note.comment.trim()) return false;
+      return true;
+    });
+  }, [commentOnly, notes, workbenchBookId, workbenchChapterId, workbenchStatus]);
+
+  const selectedNotes = useMemo(
+    () => filteredNotes.filter((note) => selectedNoteIds.includes(note.id)),
+    [filteredNotes, selectedNoteIds],
+  );
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (shouldIgnoreShortcut(event)) return;
+      const action = matchShortcut(event, shortcutBindings);
+      if (!action) return;
+      event.preventDefault();
+      runShortcutAction(action);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [shortcutBindings, activeBook, reader, chapters, pendingDraft]);
 
   const readerStyle = useMemo(
     () =>
@@ -556,7 +641,7 @@ export default function App() {
         exportScope === "book"
           ? { bookId: activeBook.id }
           : { chapterId: reader.chapter.id, chapterVersionId: reader.version.id };
-      const markdown = await exportAnnotations(scope, exportTemplate);
+      const markdown = await exportAnnotations(scope, exportTemplate, exportTaskGoal);
       setExportText(markdown);
     } catch (err) {
       setError(readError(err));
@@ -581,6 +666,176 @@ export default function App() {
     void updateSettings(patch)
       .then(setSettings)
       .catch((err) => setError(readError(err)));
+  }
+
+  function handleBookContextMenu(event: React.MouseEvent, book: BookSummary) {
+    event.preventDefault();
+    setBookMenu({
+      book,
+      x: Math.min(event.clientX, window.innerWidth - 190),
+      y: Math.min(event.clientY, window.innerHeight - 160),
+    });
+  }
+
+  async function saveBookRename() {
+    if (!renameBookDraft) return;
+    setBusy(true);
+    setError("");
+    try {
+      await updateBookName(renameBookDraft.book.id, renameBookDraft.name);
+      setRenameBookDraft(null);
+      await refreshBooks();
+      setNotice("书籍名称已更新。");
+    } catch (err) {
+      setError(readError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function syncBook(book: BookSummary) {
+    setBusy(true);
+    setError("");
+    setBookMenu(null);
+    try {
+      const report = await syncBookFolder(book.id);
+      setSyncReport(report);
+      await refreshBooks();
+      void refreshNotes();
+    } catch (err) {
+      setError(readError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function toggleNoteSelection(noteId: string) {
+    setSelectedNoteIds((current) =>
+      current.includes(noteId) ? current.filter((id) => id !== noteId) : [...current, noteId],
+    );
+  }
+
+  function toggleAllFilteredNotes() {
+    if (selectedNoteIds.length === filteredNotes.length) {
+      setSelectedNoteIds([]);
+    } else {
+      setSelectedNoteIds(filteredNotes.map((note) => note.id));
+    }
+  }
+
+  async function updateSelectedNoteStatus(status: AnnotationStatus) {
+    if (selectedNoteIds.length === 0) return;
+    setBusy(true);
+    setError("");
+    try {
+      await markAnnotationsStatus(selectedNoteIds, status);
+      setSelectedNoteIds([]);
+      await refreshNotes();
+    } catch (err) {
+      setError(readError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function exportSelectedNotes() {
+    if (selectedNoteIds.length === 0) return;
+    setBusy(true);
+    setError("");
+    try {
+      const markdown = await exportAnnotations(
+        { annotationIds: selectedNoteIds },
+        "ai-pack",
+        exportTaskGoal,
+      );
+      setBatchExportText(markdown);
+      setBatchExportOpen(true);
+      await markAnnotationsStatus(selectedNoteIds, "exported");
+      await refreshNotes();
+    } catch (err) {
+      setError(readError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copyBatchExport() {
+    if (!batchExportText) return;
+    try {
+      await navigator.clipboard.writeText(batchExportText);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      setNotice("当前环境无法直接写入剪贴板，可以手动复制导出内容。");
+    }
+  }
+
+  async function runBackupExport() {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await exportBackup();
+      setNotice(`备份已导出：${result.path}`);
+    } catch (err) {
+      setError(readError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runBackupRestore() {
+    setBusy(true);
+    setError("");
+    try {
+      const result: BackupResult = await restoreBackup();
+      await boot();
+      setNotice(`备份已恢复：${result.path}`);
+    } catch (err) {
+      setError(readError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function selectAdjacentChapter(direction: 1 | -1) {
+    if (!reader) return;
+    const index = chapters.findIndex((chapter) => chapter.id === reader.chapter.id);
+    const next = chapters[index + direction];
+    if (next) void selectChapter(next.id);
+  }
+
+  function runShortcutAction(action: ShortcutAction) {
+    if (action === "search") {
+      setSearchOpen(true);
+      return;
+    }
+    if (action === "nextChapter") {
+      selectAdjacentChapter(1);
+      return;
+    }
+    if (action === "previousChapter") {
+      selectAdjacentChapter(-1);
+      return;
+    }
+    if (action === "highlight") {
+      const nextDraft = pendingDraft ?? buildDraftFromSelection(true);
+      if (nextDraft) {
+        setPendingDraft(nextDraft);
+        setDraft(nextDraft);
+      }
+      return;
+    }
+    if (action === "export") {
+      if (reader) setExportOpen(true);
+      return;
+    }
+    if (action === "toggleLeft") {
+      if (activeBook) setIsLeftCollapsed((value) => !value);
+      return;
+    }
+    if (action === "toggleRight" && activeBook) {
+      setIsRightCollapsed((value) => !value);
+    }
   }
 
   if (!activeBook) {
@@ -621,7 +876,7 @@ export default function App() {
             >
               <MessageSquare size={18} />
             </button>
-            <button className="icon-button" title="设置" onClick={() => setSettingsOpen(true)}>
+            <button className="icon-button" title="设置" onClick={() => setHomeSettingsOpen(true)}>
               <Settings size={18} />
             </button>
           </div>
@@ -651,33 +906,38 @@ export default function App() {
         </section>
 
         {homeView === "notes" ? (
-          <main className="notes-board">
-            <div className="notes-board-header">
-              <div>
-                <p className="eyebrow">Notes</p>
-                <h2>全部笔记</h2>
-              </div>
-              <span>{notes.length} 条</span>
-            </div>
-            {notes.length === 0 ? (
-              <div className="empty-state">
-                <MessageSquare size={42} />
-                <h2>还没有笔记</h2>
-                <p>在阅读器中选中文本并添加批注后，所有笔记会汇总到这里。</p>
-              </div>
-            ) : (
-              <div className="note-grid">
-                {notes.map((note) => (
-                  <button key={note.id} className="note-card" onClick={() => void openNote(note)}>
-                    <span className="note-color" style={{ background: note.highlightColor }} />
-                    <strong>{note.comment.trim() || "无评论批注"}</strong>
-                    <small>{note.bookName} / {note.chapterTitle}</small>
-                    <p>{note.selectedText}</p>
-                  </button>
-                ))}
-              </div>
-            )}
-          </main>
+          <AnnotationWorkbench
+            books={books}
+            notes={filteredNotes}
+            allNotesCount={notes.length}
+            chapters={workbenchChapters}
+            bookId={workbenchBookId}
+            chapterId={workbenchChapterId}
+            status={workbenchStatus}
+            commentOnly={commentOnly}
+            selectedIds={selectedNoteIds}
+            selectedCount={selectedNotes.length}
+            busy={busy}
+            onBookChange={(bookId) => {
+              setWorkbenchBookId(bookId);
+              setWorkbenchChapterId("all");
+              setSelectedNoteIds([]);
+            }}
+            onChapterChange={(chapterId) => {
+              setWorkbenchChapterId(chapterId);
+              setSelectedNoteIds([]);
+            }}
+            onStatusChange={(status) => {
+              setWorkbenchStatus(status);
+              setSelectedNoteIds([]);
+            }}
+            onCommentOnlyChange={setCommentOnly}
+            onToggleNote={toggleNoteSelection}
+            onToggleAll={toggleAllFilteredNotes}
+            onOpenNote={(note) => void openNote(note)}
+            onExportSelected={() => void exportSelectedNotes()}
+            onMarkStatus={(status) => void updateSelectedNoteStatus(status)}
+          />
         ) : (
           <main className={`book-collection ${homeView}`}>
             {books.length === 0 ? (
@@ -688,7 +948,12 @@ export default function App() {
               </div>
             ) : (
               books.map((book) => (
-                <button key={book.id} className="book-card" onClick={() => void openBook(book)}>
+                <button
+                  key={book.id}
+                  className="book-card"
+                  onClick={() => void openBook(book)}
+                  onContextMenu={(event) => handleBookContextMenu(event, book)}
+                >
                   <span className="book-mark" />
                   <strong>{book.name}</strong>
                   <span>{book.chapterCount} 章 · {book.annotationCount} 条批注</span>
@@ -699,11 +964,70 @@ export default function App() {
           </main>
         )}
 
-        {settingsOpen && (
-          <SettingsPanel
+        {bookMenu && (
+          <BookContextMenu
+            menu={bookMenu}
+            onRename={() => {
+              setRenameBookDraft({ book: bookMenu.book, name: bookMenu.book.name });
+              setBookMenu(null);
+            }}
+            onSync={() => void syncBook(bookMenu.book)}
+            onVersions={() => {
+              setVersionManagerBook(bookMenu.book);
+              setBookMenu(null);
+            }}
+          />
+        )}
+        {renameBookDraft && (
+          <RenameBookModal
+            draft={renameBookDraft}
+            busy={busy}
+            onChange={(name) => setRenameBookDraft({ ...renameBookDraft, name })}
+            onClose={() => setRenameBookDraft(null)}
+            onSave={() => void saveBookRename()}
+          />
+        )}
+        {syncReport && <SyncReportModal report={syncReport} onClose={() => setSyncReport(null)} />}
+        {versionManagerBook && (
+          <VersionManagerModal
+            book={versionManagerBook}
+            onClose={() => setVersionManagerBook(null)}
+            onError={setError}
+          />
+        )}
+        {homeSettingsOpen && (
+          <HomeSettingsModal
             settings={settings}
+            busy={busy}
+            onBackupExport={() => void runBackupExport()}
+            onBackupRestore={() => void runBackupRestore()}
             onChange={applySettings}
-            onClose={() => setSettingsOpen(false)}
+            onClose={() => setHomeSettingsOpen(false)}
+          />
+        )}
+        {searchOpen && (
+          <SearchModal
+            query={searchQuery}
+            books={books}
+            notes={notes}
+            onQueryChange={setSearchQuery}
+            onClose={() => setSearchOpen(false)}
+            onOpenBook={(book) => {
+              setSearchOpen(false);
+              void openBook(book);
+            }}
+            onOpenNote={(note) => {
+              setSearchOpen(false);
+              void openNote(note);
+            }}
+          />
+        )}
+        {batchExportOpen && (
+          <BatchExportModal
+            text={batchExportText}
+            copied={copied}
+            onCopy={() => void copyBatchExport()}
+            onClose={() => setBatchExportOpen(false)}
           />
         )}
       </div>
@@ -884,11 +1208,13 @@ export default function App() {
         <ExportModal
           scope={exportScope}
           template={exportTemplate}
+          taskGoal={exportTaskGoal}
           exportText={exportText}
           copied={copied}
           busy={busy}
           onScopeChange={setExportScope}
           onTemplateChange={setExportTemplate}
+          onTaskGoalChange={setExportTaskGoal}
           onExport={() => void handleExport()}
           onCopy={() => void copyExport()}
           onClose={() => setExportOpen(false)}
@@ -899,6 +1225,23 @@ export default function App() {
           settings={settings}
           onChange={applySettings}
           onClose={() => setSettingsOpen(false)}
+        />
+      )}
+      {searchOpen && (
+        <SearchModal
+          query={searchQuery}
+          books={books}
+          notes={notes}
+          onQueryChange={setSearchQuery}
+          onClose={() => setSearchOpen(false)}
+          onOpenBook={(book) => {
+            setSearchOpen(false);
+            void openBook(book);
+          }}
+          onOpenNote={(note) => {
+            setSearchOpen(false);
+            void openNote(note);
+          }}
         />
       )}
       {contextMenu && pendingDraft && (
@@ -934,488 +1277,6 @@ export default function App() {
       )}
     </div>
   );
-}
-
-function AnnotationCard({
-  annotation,
-  active,
-  onOpen,
-}: {
-  annotation: Annotation;
-  active: boolean;
-  onOpen: () => void;
-}) {
-  return (
-    <button className={`annotation-card compact ${active ? "active" : ""}`} onClick={onOpen}>
-      <span className="annotation-dot" style={{ background: annotation.highlightColor }} />
-      <span className="annotation-summary">{annotation.comment.trim() || "无评论批注"}</span>
-    </button>
-  );
-}
-
-function SortChaptersModal({
-  chapters,
-  activeChapterId,
-  dragChapterId,
-  busy,
-  onDragStart,
-  onMove,
-  onClose,
-  onSave,
-}: {
-  chapters: Chapter[];
-  activeChapterId?: string;
-  dragChapterId: string | null;
-  busy: boolean;
-  onDragStart: (chapterId: string | null) => void;
-  onMove: (targetChapterId: string, movedChapterId?: string | null) => void;
-  onClose: () => void;
-  onSave: () => void;
-}) {
-  const dragIdRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    dragIdRef.current = dragChapterId;
-  }, [dragChapterId]);
-
-  useEffect(() => {
-    if (!dragChapterId) return;
-
-    const handlePointerMove = (event: PointerEvent) => {
-      event.preventDefault();
-      const element = document.elementFromPoint(event.clientX, event.clientY);
-      const row = element?.closest<HTMLElement>("[data-sort-chapter-id]");
-      const targetChapterId = row?.dataset.sortChapterId;
-      if (targetChapterId) {
-        onMove(targetChapterId, dragIdRef.current);
-      }
-    };
-
-    const handlePointerEnd = () => {
-      dragIdRef.current = null;
-      onDragStart(null);
-    };
-
-    document.body.classList.add("sorting-drag-active");
-    window.addEventListener("pointermove", handlePointerMove, { passive: false });
-    window.addEventListener("pointerup", handlePointerEnd);
-    window.addEventListener("pointercancel", handlePointerEnd);
-
-    return () => {
-      document.body.classList.remove("sorting-drag-active");
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", handlePointerEnd);
-      window.removeEventListener("pointercancel", handlePointerEnd);
-    };
-  }, [dragChapterId, onDragStart, onMove]);
-
-  return (
-    <div
-      className="modal-backdrop"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) {
-          onClose();
-        }
-      }}
-    >
-      <section className="annotation-modal sort-modal" onMouseDown={(event) => event.stopPropagation()}>
-        <header>
-          <div>
-            <p className="eyebrow">Chapter Order</p>
-            <h2>调整章节顺序</h2>
-          </div>
-          <button className="icon-button" title="关闭" onClick={onClose}>
-            <X size={18} />
-          </button>
-        </header>
-        <div className="sort-list">
-          {chapters.map((chapter, index) => (
-            <div
-              key={chapter.id}
-              data-sort-chapter-id={chapter.id}
-              className={`sort-row ${chapter.id === activeChapterId ? "active" : ""} ${
-                chapter.id === dragChapterId ? "dragging" : ""
-              }`}
-              onPointerDown={(event) => {
-                if (event.button !== 0) return;
-                event.preventDefault();
-                dragIdRef.current = chapter.id;
-                onDragStart(chapter.id);
-              }}
-            >
-              <span className="sort-index">{String(index + 1).padStart(2, "0")}</span>
-              <GripVertical size={16} />
-              <strong>{chapterFileName(chapter)}</strong>
-            </div>
-          ))}
-        </div>
-        <div className="modal-actions">
-          <button onClick={onClose}>取消</button>
-          <button className="primary-button" onClick={onSave} disabled={busy || chapters.length === 0}>
-            <Save size={17} />
-            保存顺序
-          </button>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function ExportModal({
-  scope,
-  template,
-  exportText,
-  copied,
-  busy,
-  onScopeChange,
-  onTemplateChange,
-  onExport,
-  onCopy,
-  onClose,
-}: {
-  scope: "chapter" | "book";
-  template: ExportTemplate;
-  exportText: string;
-  copied: boolean;
-  busy: boolean;
-  onScopeChange: (scope: "chapter" | "book") => void;
-  onTemplateChange: (template: ExportTemplate) => void;
-  onExport: () => void;
-  onCopy: () => void;
-  onClose: () => void;
-}) {
-  return (
-    <div
-      className="modal-backdrop"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) {
-          onClose();
-        }
-      }}
-    >
-      <section className="annotation-modal export-modal" onMouseDown={(event) => event.stopPropagation()}>
-        <header>
-          <div>
-            <p className="eyebrow">Export</p>
-            <h2>导出批注包</h2>
-          </div>
-          <button className="icon-button" title="关闭" onClick={onClose}>
-            <X size={18} />
-          </button>
-        </header>
-        <div className="segmented">
-          <button className={scope === "chapter" ? "active" : ""} onClick={() => onScopeChange("chapter")}>
-            本章
-          </button>
-          <button className={scope === "book" ? "active" : ""} onClick={() => onScopeChange("book")}>
-            全书
-          </button>
-        </div>
-        <label className="modal-field">
-          模板
-          <select value={template} onChange={(event) => onTemplateChange(event.target.value as ExportTemplate)}>
-            <option value="reading-notes">阅读笔记模板</option>
-            <option value="ai-pack">AI 修改包模板</option>
-            <option value="question-list">问题清单模板</option>
-            <option value="annotation-index">全书批注索引</option>
-          </select>
-        </label>
-        <div className="modal-actions export-actions">
-          <button onClick={onExport} disabled={busy}>
-            <FileText size={16} />
-            生成 Markdown
-          </button>
-          <button onClick={onCopy} disabled={!exportText}>
-            {copied ? <Check size={16} /> : <Copy size={16} />}
-            {copied ? "已复制" : "复制"}
-          </button>
-        </div>
-        <textarea
-          className="export-output"
-          value={exportText}
-          readOnly
-          placeholder="生成后的 Markdown 会显示在这里"
-          aria-label="导出内容"
-        />
-      </section>
-    </div>
-  );
-}
-
-function NewAnnotationModal({
-  draft,
-  onChange,
-  onCancel,
-  onSave,
-}: {
-  draft: SelectionDraft;
-  onChange: (draft: SelectionDraft) => void;
-  onCancel: () => void;
-  onSave: () => void;
-}) {
-  return (
-    <div
-      className="modal-backdrop"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) {
-          onCancel();
-        }
-      }}
-    >
-      <section className="annotation-modal" onMouseDown={(event) => event.stopPropagation()}>
-        <header>
-          <div>
-            <p className="eyebrow">New Note</p>
-            <h2>添加批注</h2>
-          </div>
-          <button className="icon-button" title="关闭" onClick={onCancel}>
-            <X size={18} />
-          </button>
-        </header>
-        <blockquote>{draft.selectedText}</blockquote>
-        <ColorSwatches
-          value={draft.highlightColor}
-          onChange={(highlightColor) => onChange({ ...draft, highlightColor })}
-        />
-        <textarea
-          autoFocus
-          value={draft.comment}
-          onChange={(event) => onChange({ ...draft, comment: event.target.value })}
-          placeholder="写下评论、修改意图或想追问 AI 的问题"
-        />
-        <div className="modal-actions">
-          <button onClick={onCancel}>取消</button>
-          <button className="primary-button" onClick={onSave}>
-            <Save size={17} />
-            保存批注
-          </button>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function AnnotationDetailModal({
-  annotation,
-  onClose,
-  onDelete,
-  onSave,
-}: {
-  annotation: Annotation;
-  onClose: () => void;
-  onDelete: () => void;
-  onSave: (patch: Partial<Annotation>) => void;
-}) {
-  const [comment, setComment] = useState(annotation.comment);
-  const [highlightColor, setHighlightColor] = useState(annotation.highlightColor);
-
-  useEffect(() => {
-    setComment(annotation.comment);
-    setHighlightColor(annotation.highlightColor);
-  }, [annotation]);
-
-  return (
-    <div
-      className="modal-backdrop"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) {
-          onClose();
-        }
-      }}
-    >
-      <section className="annotation-modal detail" onMouseDown={(event) => event.stopPropagation()}>
-        <header>
-          <div>
-            <p className="eyebrow">Note Detail</p>
-            <h2>批注详情</h2>
-          </div>
-          <button className="icon-button" title="关闭" onClick={onClose}>
-            <X size={18} />
-          </button>
-        </header>
-        <div className="annotation-meta">
-          <span style={{ background: highlightColor }} />
-          <small>{annotation.headingPath || "无标题路径"}</small>
-        </div>
-        <blockquote>{annotation.selectedText}</blockquote>
-        <ColorSwatches value={highlightColor} onChange={setHighlightColor} />
-        <textarea value={comment} onChange={(event) => setComment(event.target.value)} />
-        <div className="modal-actions">
-          <button className="danger" onClick={onDelete}>
-            <Trash2 size={16} />
-            删除
-          </button>
-          <button className="primary-button" onClick={() => onSave({ comment, highlightColor })}>
-            <Save size={17} />
-            保存
-          </button>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function ColorSwatches({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (color: string) => void;
-}) {
-  return (
-    <div className="color-swatches">
-      {highlightColors.map((color) => (
-        <button
-          key={color}
-          className={value === color ? "active" : ""}
-          style={{ background: color }}
-          title={color}
-          onClick={() => onChange(color)}
-        />
-      ))}
-    </div>
-  );
-}
-
-function SettingsPanel({
-  settings,
-  onChange,
-  onClose,
-}: {
-  settings: AppSettings;
-  onChange: (patch: Partial<AppSettings>) => void;
-  onClose: () => void;
-}) {
-  return (
-    <div
-      className="settings-backdrop"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) {
-          onClose();
-        }
-      }}
-    >
-      <section className="settings-panel" onMouseDown={(event) => event.stopPropagation()}>
-        <header>
-          <div>
-            <p className="eyebrow">Settings</p>
-            <h2>阅读器设置</h2>
-          </div>
-          <button className="icon-button" title="关闭" onClick={onClose}>
-            <X size={18} />
-          </button>
-        </header>
-
-        <label>
-          主题
-          <select value={settings.theme} onChange={(event) => onChange({ theme: event.target.value })}>
-            <option value="paper">纸张日间</option>
-            <option value="daylight">清亮日间</option>
-            <option value="mint">薄荷日间</option>
-            <option value="focus">专注日间</option>
-            <option value="night">暖黑夜读</option>
-            <option value="midnight">深蓝夜读</option>
-            <option value="graphite">石墨夜读</option>
-          </select>
-        </label>
-
-        <label>
-          字体
-          <select value={settings.fontFamily} onChange={(event) => onChange({ fontFamily: event.target.value })}>
-            <option value="Literata, Georgia, serif">Literata / Georgia</option>
-            <option value="'Noto Serif SC', 'Songti SC', serif">宋体阅读</option>
-            <option value="'IBM Plex Sans', 'Segoe UI', sans-serif">Plex Sans</option>
-            <option value="'JetBrains Mono', Consolas, monospace">Mono</option>
-          </select>
-        </label>
-
-        <RangeControl label="上下文字数" min={20} max={300} step={10} value={settings.annotationContextChars} onChange={(value) => onChange({ annotationContextChars: value })} />
-        <RangeControl label="字号" min={14} max={24} step={1} value={settings.fontSize} onChange={(value) => onChange({ fontSize: value })} />
-        <RangeControl label="行距" min={1.35} max={2.1} step={0.05} value={settings.lineHeight} onChange={(value) => onChange({ lineHeight: value })} />
-        <RangeControl label="正文宽度" min={620} max={1040} step={20} value={settings.contentWidth} onChange={(value) => onChange({ contentWidth: value })} />
-        <RangeControl label="页边距" min={24} max={88} step={4} value={settings.pagePadding} onChange={(value) => onChange({ pagePadding: value })} />
-        <RangeControl label="段落间距" min={8} max={30} step={1} value={settings.paragraphSpacing} onChange={(value) => onChange({ paragraphSpacing: value })} />
-
-        <label>
-          页面质感
-          <select value={settings.surface} onChange={(event) => onChange({ surface: event.target.value })}>
-            <option value="warm">温润纸面</option>
-            <option value="plain">简洁白底</option>
-            <option value="ink">墨色底</option>
-          </select>
-        </label>
-
-        <label>
-          边框
-          <select value={settings.borderStyle} onChange={(event) => onChange({ borderStyle: event.target.value })}>
-            <option value="hairline">细线</option>
-            <option value="rail">侧栏线</option>
-            <option value="none">无边框</option>
-          </select>
-        </label>
-      </section>
-    </div>
-  );
-}
-
-function RangeControl({
-  label,
-  min,
-  max,
-  step,
-  value,
-  onChange,
-}: {
-  label: string;
-  min: number;
-  max: number;
-  step: number;
-  value: number;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <label>
-      <span>
-        {label}
-        <strong>{value}</strong>
-      </span>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
-      />
-    </label>
-  );
-}
-
-function TopNotice({
-  error,
-  notice,
-  onClose,
-}: {
-  error: string;
-  notice: string;
-  onClose: () => void;
-}) {
-  const text = error || notice;
-  if (!text) return null;
-  return (
-    <div className={`top-notice ${error ? "error" : ""}`}>
-      <span>{text}</span>
-      <button className="icon-button small" onClick={onClose}>
-        <X size={14} />
-      </button>
-    </div>
-  );
-}
-
-function chapterFileName(chapter: Chapter) {
-  const normalizedPath = chapter.filePath.replace(/\\/g, "/");
-  const fileName = normalizedPath.split("/").filter(Boolean).pop();
-  return fileName || chapter.title;
 }
 
 function readError(err: unknown) {

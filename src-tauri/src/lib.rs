@@ -1,217 +1,27 @@
-use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Manager, State};
-use uuid::Uuid;
 
-type AppResult<T> = Result<T, String>;
+mod db;
+mod domain;
+mod exporter;
+mod utils;
+
+use db::init_database;
+use domain::*;
+use exporter::render_export;
+use utils::{
+    chapter_file_name_from_path, chapter_title_from_path, collect_rows, db_error, extract_outline,
+    hash_content, new_id, now, path_to_string, repeat_placeholders, scan_markdown_files,
+    validate_annotation_status,
+};
 
 struct AppState {
     conn: Mutex<Connection>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Book {
-    id: String,
-    name: String,
-    root_path: String,
-    view_mode: String,
-    created_at: String,
-    updated_at: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct BookSummary {
-    id: String,
-    name: String,
-    root_path: String,
-    view_mode: String,
-    created_at: String,
-    updated_at: String,
-    chapter_count: i64,
-    annotation_count: i64,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Chapter {
-    id: String,
-    book_id: String,
-    file_path: String,
-    title: String,
-    sort_index: i64,
-    current_version_id: String,
-    created_at: String,
-    updated_at: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ChapterVersion {
-    id: String,
-    chapter_id: String,
-    content_hash: String,
-    version_number: i64,
-    created_at: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Annotation {
-    id: String,
-    book_id: String,
-    chapter_id: String,
-    chapter_version_id: String,
-    selected_text: String,
-    start_offset: i64,
-    end_offset: i64,
-    context_before: String,
-    context_after: String,
-    heading_path: String,
-    highlight_color: String,
-    comment: String,
-    tags: String,
-    created_at: String,
-    updated_at: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NoteItem {
-    id: String,
-    book_id: String,
-    book_name: String,
-    chapter_id: String,
-    chapter_title: String,
-    chapter_version_id: String,
-    selected_text: String,
-    heading_path: String,
-    highlight_color: String,
-    comment: String,
-    created_at: String,
-    updated_at: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct OutlineItem {
-    level: i64,
-    title: String,
-    offset: i64,
-    id: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct BookWithChapters {
-    book: Book,
-    chapters: Vec<Chapter>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ReadChapterResponse {
-    chapter: Chapter,
-    version: ChapterVersion,
-    versions: Vec<ChapterVersion>,
-    content: String,
-    outline: Vec<OutlineItem>,
-    annotations: Vec<Annotation>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AnnotationPayload {
-    book_id: String,
-    chapter_id: String,
-    chapter_version_id: String,
-    selected_text: String,
-    start_offset: i64,
-    end_offset: i64,
-    context_before: String,
-    context_after: String,
-    heading_path: String,
-    highlight_color: String,
-    comment: String,
-    tags: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AnnotationPatch {
-    highlight_color: Option<String>,
-    comment: Option<String>,
-    tags: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AnnotationScope {
-    book_id: Option<String>,
-    chapter_id: Option<String>,
-    chapter_version_id: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AppSettings {
-    annotation_context_chars: i64,
-    theme: String,
-    font_family: String,
-    font_size: i64,
-    line_height: f64,
-    content_width: i64,
-    page_padding: i64,
-    paragraph_spacing: i64,
-    surface: String,
-    border_style: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SettingsPatch {
-    annotation_context_chars: Option<i64>,
-    theme: Option<String>,
-    font_family: Option<String>,
-    font_size: Option<i64>,
-    line_height: Option<f64>,
-    content_width: Option<i64>,
-    page_padding: Option<i64>,
-    paragraph_spacing: Option<i64>,
-    surface: Option<String>,
-    border_style: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ReadingProgressPayload {
-    book_id: String,
-    chapter_id: String,
-    chapter_version_id: String,
-    scroll_top: f64,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ReadingProgress {
-    book_id: String,
-    chapter_id: String,
-    chapter_version_id: String,
-    scroll_top: f64,
-    updated_at: String,
-}
-
-#[derive(Debug)]
-struct ExportRow {
-    annotation: Annotation,
-    chapter_title: String,
-    chapter_sort_index: i64,
+    db_path: PathBuf,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -224,6 +34,7 @@ pub fn run() {
             let conn = init_database(&db_path)?;
             app.manage(AppState {
                 conn: Mutex::new(conn),
+                db_path,
             });
             Ok(())
         })
@@ -232,17 +43,25 @@ pub fn run() {
             import_book_folder,
             list_books,
             get_book,
+            update_book_name,
+            sync_book_folder,
             list_chapters,
             reorder_chapters,
+            list_chapter_versions,
+            update_chapter_version_label,
+            delete_chapter_version,
             read_chapter,
             read_chapter_version,
             refresh_chapter_version,
             create_annotation,
             update_annotation,
             delete_annotation,
+            mark_annotations_status,
             list_annotations,
             list_note_items,
             export_annotations,
+            export_backup,
+            restore_backup,
             get_settings,
             update_settings,
             save_reading_progress,
@@ -289,151 +108,86 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
     }
 }
 
-fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
-    let conn = Connection::open(db_path)?;
-    conn.pragma_update(None, "foreign_keys", "ON")?;
-    conn.execute_batch(
-        r#"
-        CREATE TABLE IF NOT EXISTS books (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            root_path TEXT NOT NULL UNIQUE,
-            view_mode TEXT NOT NULL DEFAULT 'grid',
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+fn pick_backup_save_path() -> AppResult<Option<PathBuf>> {
+    #[cfg(target_os = "windows")]
+    {
+        let timestamp = now()
+            .chars()
+            .filter(|char| char.is_ascii_digit())
+            .take(14)
+            .collect::<String>();
+        let default_name = format!("loop-book-backup-{timestamp}.sqlite3");
+        let script = format!(
+            r#"
+Add-Type -AssemblyName System.Windows.Forms
+$dialog = New-Object System.Windows.Forms.SaveFileDialog
+$dialog.Title = 'Export Loop Book backup'
+$dialog.Filter = 'SQLite backup (*.sqlite3)|*.sqlite3|All files (*.*)|*.*'
+$dialog.FileName = '{}'
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
+  [Console]::Out.Write($dialog.FileName)
+}}
+"#,
+            default_name.replace('\'', "''")
         );
-
-        CREATE TABLE IF NOT EXISTS chapters (
-            id TEXT PRIMARY KEY,
-            book_id TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            title TEXT NOT NULL,
-            sort_index INTEGER NOT NULL,
-            current_version_id TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            UNIQUE(book_id, file_path),
-            FOREIGN KEY(book_id) REFERENCES books(id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS chapter_versions (
-            id TEXT PRIMARY KEY,
-            chapter_id TEXT NOT NULL,
-            content_hash TEXT NOT NULL,
-            version_number INTEGER NOT NULL DEFAULT 1,
-            content_snapshot TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(chapter_id) REFERENCES chapters(id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS annotations (
-            id TEXT PRIMARY KEY,
-            book_id TEXT NOT NULL,
-            chapter_id TEXT NOT NULL,
-            chapter_version_id TEXT NOT NULL,
-            selected_text TEXT NOT NULL,
-            start_offset INTEGER NOT NULL,
-            end_offset INTEGER NOT NULL,
-            context_before TEXT NOT NULL,
-            context_after TEXT NOT NULL,
-            heading_path TEXT NOT NULL,
-            highlight_color TEXT NOT NULL,
-            comment TEXT NOT NULL,
-            tags TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY(book_id) REFERENCES books(id) ON DELETE CASCADE,
-            FOREIGN KEY(chapter_id) REFERENCES chapters(id) ON DELETE CASCADE,
-            FOREIGN KEY(chapter_version_id) REFERENCES chapter_versions(id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS reading_progress (
-            book_id TEXT NOT NULL,
-            chapter_id TEXT NOT NULL,
-            chapter_version_id TEXT NOT NULL,
-            scroll_top REAL NOT NULL,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY(book_id, chapter_id, chapter_version_id),
-            FOREIGN KEY(book_id) REFERENCES books(id) ON DELETE CASCADE,
-            FOREIGN KEY(chapter_id) REFERENCES chapters(id) ON DELETE CASCADE,
-            FOREIGN KEY(chapter_version_id) REFERENCES chapter_versions(id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS settings (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            annotation_context_chars INTEGER NOT NULL,
-            theme TEXT NOT NULL,
-            font_family TEXT NOT NULL,
-            font_size INTEGER NOT NULL,
-            line_height REAL NOT NULL,
-            content_width INTEGER NOT NULL,
-            page_padding INTEGER NOT NULL,
-            paragraph_spacing INTEGER NOT NULL,
-            surface TEXT NOT NULL,
-            border_style TEXT NOT NULL
-        );
-        "#,
-    )?;
-
-    ensure_column(
-        &conn,
-        "chapter_versions",
-        "version_number",
-        "ALTER TABLE chapter_versions ADD COLUMN version_number INTEGER NOT NULL DEFAULT 1",
-    )?;
-    conn.execute_batch(
-        r#"
-        UPDATE chapter_versions
-        SET version_number = (
-            SELECT COUNT(*)
-            FROM chapter_versions older
-            WHERE older.chapter_id = chapter_versions.chapter_id
-              AND (
-                older.created_at < chapter_versions.created_at
-                OR (older.created_at = chapter_versions.created_at AND older.id <= chapter_versions.id)
-              )
-        );
-        "#,
-    )?;
-
-    conn.execute(
-        r#"
-        INSERT OR IGNORE INTO settings (
-            id,
-            annotation_context_chars,
-            theme,
-            font_family,
-            font_size,
-            line_height,
-            content_width,
-            page_padding,
-            paragraph_spacing,
-            surface,
-            border_style
-        ) VALUES (1, 100, 'paper', 'Literata, Georgia, serif', 18, 1.72, 820, 52, 18, 'warm', 'hairline')
-        "#,
-        [],
-    )?;
-
-    Ok(conn)
-}
-
-fn ensure_column(
-    conn: &Connection,
-    table: &str,
-    column: &str,
-    alter_sql: &str,
-) -> Result<(), rusqlite::Error> {
-    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
-    let mut rows = stmt.query([])?;
-    while let Some(row) = rows.next()? {
-        let name: String = row.get(1)?;
-        if name == column {
-            return Ok(());
+        let output = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-STA", "-Command", &script])
+            .output()
+            .map_err(|error| format!("Failed to open backup save dialog: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "Backup save dialog failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if selected.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(PathBuf::from(selected)))
         }
     }
-    conn.execute(alter_sql, [])?;
-    Ok(())
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(None)
+    }
+}
+
+fn pick_backup_open_path() -> AppResult<Option<PathBuf>> {
+    #[cfg(target_os = "windows")]
+    {
+        let script = r#"
+Add-Type -AssemblyName System.Windows.Forms
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Title = 'Restore Loop Book backup'
+$dialog.Filter = 'SQLite backup (*.sqlite3)|*.sqlite3|All files (*.*)|*.*'
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+  [Console]::Out.Write($dialog.FileName)
+}
+"#;
+        let output = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-STA", "-Command", script])
+            .output()
+            .map_err(|error| format!("Failed to open backup file dialog: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "Backup file dialog failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if selected.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(PathBuf::from(selected)))
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(None)
+    }
 }
 
 #[tauri::command]
@@ -512,8 +266,8 @@ fn import_book_folder(path: String, state: State<AppState>) -> AppResult<BookWit
         tx.execute(
             r#"
             INSERT INTO chapters (
-                id, book_id, file_path, title, sort_index, current_version_id, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+                id, book_id, file_path, title, sort_index, current_version_id, is_missing, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?7)
             "#,
             params![
                 chapter_id,
@@ -594,9 +348,72 @@ fn get_book(book_id: String, state: State<AppState>) -> AppResult<Book> {
 }
 
 #[tauri::command]
+fn update_book_name(book_id: String, name: String, state: State<AppState>) -> AppResult<Book> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("Book name cannot be empty.".to_string());
+    }
+
+    let conn = lock_conn(&state)?;
+    conn.execute(
+        "UPDATE books SET name = ?1, updated_at = ?2 WHERE id = ?3",
+        params![trimmed, now(), book_id],
+    )
+    .map_err(|error| format!("Failed to rename book: {error}"))?;
+    get_book_by_id(&conn, &book_id)
+}
+
+#[tauri::command]
+fn sync_book_folder(book_id: String, state: State<AppState>) -> AppResult<FolderSyncReport> {
+    let mut conn = lock_conn(&state)?;
+    sync_book_folder_inner(&mut conn, &book_id)
+}
+
+#[tauri::command]
 fn list_chapters(book_id: String, state: State<AppState>) -> AppResult<Vec<Chapter>> {
     let conn = lock_conn(&state)?;
     load_chapters(&conn, &book_id)
+}
+
+#[tauri::command]
+fn list_chapter_versions(
+    chapter_id: String,
+    state: State<AppState>,
+) -> AppResult<Vec<ChapterVersion>> {
+    let conn = lock_conn(&state)?;
+    load_chapter_versions(&conn, &chapter_id)
+}
+
+#[tauri::command]
+fn update_chapter_version_label(
+    chapter_version_id: String,
+    label: String,
+    state: State<AppState>,
+) -> AppResult<ChapterVersion> {
+    let conn = lock_conn(&state)?;
+    conn.execute(
+        "UPDATE chapter_versions SET label = ?1 WHERE id = ?2",
+        params![label.trim(), chapter_version_id],
+    )
+    .map_err(|error| format!("Failed to rename chapter version: {error}"))?;
+    get_chapter_version_by_id(&conn, &chapter_version_id)
+}
+
+#[tauri::command]
+fn delete_chapter_version(chapter_version_id: String, state: State<AppState>) -> AppResult<()> {
+    let conn = lock_conn(&state)?;
+    let version = get_chapter_version_by_id(&conn, &chapter_version_id)?;
+    let chapter = get_chapter_by_id(&conn, &version.chapter_id)?;
+    if chapter.current_version_id == chapter_version_id {
+        return Err("Current chapter version cannot be deleted. Switch to or create another current version first.".to_string());
+    }
+
+    conn.execute(
+        "DELETE FROM chapter_versions WHERE id = ?1",
+        params![chapter_version_id],
+    )
+    .map_err(|error| format!("Failed to delete chapter version: {error}"))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -683,9 +500,10 @@ fn create_annotation(
             highlight_color,
             comment,
             tags,
+            status,
             created_at,
             updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'pending', ?14, ?14)
         "#,
         params![
             id,
@@ -717,17 +535,21 @@ fn update_annotation(
 ) -> AppResult<Annotation> {
     let conn = lock_conn(&state)?;
     let existing = get_annotation_by_id(&conn, &annotation_id)?;
+    if let Some(status) = &patch.status {
+        validate_annotation_status(status)?;
+    }
     let now = now();
     conn.execute(
         r#"
         UPDATE annotations
-        SET highlight_color = ?1, comment = ?2, tags = ?3, updated_at = ?4
-        WHERE id = ?5
+        SET highlight_color = ?1, comment = ?2, tags = ?3, status = ?4, updated_at = ?5
+        WHERE id = ?6
         "#,
         params![
             patch.highlight_color.unwrap_or(existing.highlight_color),
             patch.comment.unwrap_or(existing.comment),
             patch.tags.unwrap_or(existing.tags),
+            patch.status.unwrap_or(existing.status),
             now,
             annotation_id
         ],
@@ -742,6 +564,34 @@ fn delete_annotation(annotation_id: String, state: State<AppState>) -> AppResult
     let conn = lock_conn(&state)?;
     conn.execute("DELETE FROM annotations WHERE id = ?1", params![annotation_id])
         .map_err(|error| format!("Failed to delete annotation: {error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn mark_annotations_status(
+    annotation_ids: Vec<String>,
+    status: String,
+    state: State<AppState>,
+) -> AppResult<()> {
+    validate_annotation_status(&status)?;
+    if annotation_ids.is_empty() {
+        return Ok(());
+    }
+
+    let mut conn = lock_conn(&state)?;
+    let tx = conn
+        .transaction()
+        .map_err(|error| format!("Failed to start status transaction: {error}"))?;
+    let now = now();
+    for annotation_id in annotation_ids {
+        tx.execute(
+            "UPDATE annotations SET status = ?1, updated_at = ?2 WHERE id = ?3",
+            params![status, now, annotation_id],
+        )
+        .map_err(|error| format!("Failed to update annotation status: {error}"))?;
+    }
+    tx.commit()
+        .map_err(|error| format!("Failed to save annotation status: {error}"))?;
     Ok(())
 }
 
@@ -771,6 +621,7 @@ fn list_note_items(state: State<AppState>) -> AppResult<Vec<NoteItem>> {
                 a.heading_path,
                 a.highlight_color,
                 a.comment,
+                a.status,
                 a.created_at,
                 a.updated_at
             FROM annotations a
@@ -794,8 +645,9 @@ fn list_note_items(state: State<AppState>) -> AppResult<Vec<NoteItem>> {
                 heading_path: row.get(7)?,
                 highlight_color: row.get(8)?,
                 comment: row.get(9)?,
-                created_at: row.get(10)?,
-                updated_at: row.get(11)?,
+                status: row.get(10)?,
+                created_at: row.get(11)?,
+                updated_at: row.get(12)?,
             })
         })
         .map_err(db_error)?;
@@ -807,11 +659,103 @@ fn list_note_items(state: State<AppState>) -> AppResult<Vec<NoteItem>> {
 fn export_annotations(
     scope: AnnotationScope,
     template_id: String,
+    task_goal: Option<String>,
     state: State<AppState>,
 ) -> AppResult<String> {
     let conn = lock_conn(&state)?;
     let rows = load_export_rows(&conn, &scope)?;
-    Ok(render_export(&template_id, &rows))
+    Ok(render_export(&template_id, task_goal.as_deref(), &rows))
+}
+
+#[tauri::command]
+fn export_backup(state: State<AppState>) -> AppResult<BackupResult> {
+    let target_path = pick_backup_save_path()?;
+    let Some(target_path) = target_path else {
+        return Err("Backup export was cancelled.".to_string());
+    };
+
+    if target_path == state.db_path {
+        return Err("Backup path cannot be the active database file.".to_string());
+    }
+    if target_path.exists() {
+        fs::remove_file(&target_path)
+            .map_err(|error| format!("Failed to replace existing backup file: {error}"))?;
+    }
+
+    let conn = lock_conn(&state)?;
+    conn.execute("VACUUM main INTO ?1", params![path_to_string(&target_path)])
+        .map_err(|error| format!("Failed to export backup: {error}"))?;
+    Ok(BackupResult {
+        path: path_to_string(&target_path),
+    })
+}
+
+#[tauri::command]
+fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
+    let source_path = pick_backup_open_path()?;
+    let Some(source_path) = source_path else {
+        return Err("Backup restore was cancelled.".to_string());
+    };
+    if !source_path.is_file() {
+        return Err("Selected backup file does not exist.".to_string());
+    }
+
+    let conn = lock_conn(&state)?;
+    conn.execute("ATTACH DATABASE ?1 AS backup", params![path_to_string(&source_path)])
+        .map_err(|error| format!("Failed to open backup database: {error}"))?;
+    let restore_result = conn.execute_batch(
+        r#"
+        PRAGMA foreign_keys = OFF;
+        BEGIN;
+        DELETE FROM reading_progress;
+        DELETE FROM annotations;
+        DELETE FROM chapter_versions;
+        DELETE FROM chapters;
+        DELETE FROM books;
+        DELETE FROM settings;
+
+        INSERT INTO books (id, name, root_path, view_mode, created_at, updated_at)
+        SELECT id, name, root_path, view_mode, created_at, updated_at FROM backup.books;
+
+        INSERT INTO chapters (id, book_id, file_path, title, sort_index, current_version_id, is_missing, created_at, updated_at)
+        SELECT id, book_id, file_path, title, sort_index, current_version_id, is_missing, created_at, updated_at FROM backup.chapters;
+
+        INSERT INTO chapter_versions (id, chapter_id, content_hash, version_number, content_snapshot, label, created_at)
+        SELECT id, chapter_id, content_hash, version_number, content_snapshot, label, created_at FROM backup.chapter_versions;
+
+        INSERT INTO annotations (
+            id, book_id, chapter_id, chapter_version_id, selected_text, start_offset, end_offset,
+            context_before, context_after, heading_path, highlight_color, comment, tags, status,
+            created_at, updated_at
+        )
+        SELECT
+            id, book_id, chapter_id, chapter_version_id, selected_text, start_offset, end_offset,
+            context_before, context_after, heading_path, highlight_color, comment, tags, status,
+            created_at, updated_at
+        FROM backup.annotations;
+
+        INSERT INTO reading_progress (book_id, chapter_id, chapter_version_id, scroll_top, updated_at)
+        SELECT book_id, chapter_id, chapter_version_id, scroll_top, updated_at FROM backup.reading_progress;
+
+        INSERT INTO settings (
+            id, annotation_context_chars, theme, font_family, font_size, line_height,
+            content_width, page_padding, paragraph_spacing, surface, border_style, shortcut_bindings
+        )
+        SELECT
+            id, annotation_context_chars, theme, font_family, font_size, line_height,
+            content_width, page_padding, paragraph_spacing, surface, border_style, shortcut_bindings
+        FROM backup.settings;
+        COMMIT;
+        PRAGMA foreign_keys = ON;
+        "#,
+    );
+    let detach_result = conn.execute_batch("DETACH DATABASE backup;");
+    restore_result.map_err(|error| format!("Failed to restore backup: {error}"))?;
+    detach_result.map_err(|error| format!("Failed to close backup database: {error}"))?;
+
+    Ok(BackupResult {
+        path: path_to_string(&source_path),
+    })
 }
 
 #[tauri::command]
@@ -837,7 +781,8 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
             page_padding = ?7,
             paragraph_spacing = ?8,
             surface = ?9,
-            border_style = ?10
+            border_style = ?10,
+            shortcut_bindings = ?11
         WHERE id = 1
         "#,
         params![
@@ -852,7 +797,8 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
             patch.page_padding.unwrap_or(current.page_padding),
             patch.paragraph_spacing.unwrap_or(current.paragraph_spacing),
             patch.surface.unwrap_or(current.surface),
-            patch.border_style.unwrap_or(current.border_style)
+            patch.border_style.unwrap_or(current.border_style),
+            patch.shortcut_bindings.unwrap_or(current.shortcut_bindings)
         ],
     )
     .map_err(|error| format!("Failed to update settings: {error}"))?;
@@ -936,6 +882,152 @@ fn lock_conn<'a, 'b>(
         .map_err(|_| "Database lock is poisoned.".to_string())
 }
 
+fn sync_book_folder_inner(conn: &mut Connection, book_id: &str) -> AppResult<FolderSyncReport> {
+    let book = get_book_by_id(conn, book_id)?;
+    let root_path = PathBuf::from(&book.root_path);
+    if !root_path.is_dir() {
+        return Err("Book root folder is missing.".to_string());
+    }
+
+    let scanned_files = scan_markdown_files(&root_path)?;
+    let chapters = load_chapters(conn, book_id)?;
+    let existing_paths = chapters
+        .iter()
+        .map(|chapter| chapter.file_path.clone())
+        .collect::<HashSet<_>>();
+    let mut file_candidates = Vec::new();
+
+    for file_path in scanned_files {
+        let file_path_text = path_to_string(&file_path);
+        if existing_paths.contains(&file_path_text) {
+            continue;
+        }
+        let content = fs::read_to_string(&file_path)
+            .map_err(|error| format!("Failed to read {}: {error}", file_path_text))?;
+        let content_hash = hash_content(&content);
+        file_candidates.push((file_path, file_path_text, content, content_hash));
+    }
+
+    let mut report = FolderSyncReport {
+        added: 0,
+        missing: 0,
+        changed: 0,
+        renamed: 0,
+        unchanged: 0,
+        messages: Vec::new(),
+    };
+
+    for chapter in &chapters {
+        let chapter_path = PathBuf::from(&chapter.file_path);
+        if chapter_path.is_file() {
+            let before_version = get_chapter_version_by_id(conn, &chapter.current_version_id)?;
+            let content = fs::read_to_string(&chapter_path)
+                .map_err(|error| format!("Failed to read {}: {error}", chapter.file_path))?;
+            if hash_content(&content) != before_version.content_hash {
+                ensure_current_chapter_version(conn, &chapter.id)?;
+                report.changed += 1;
+                report
+                    .messages
+                    .push(format!("Changed: {}", chapter_file_name_from_path(&chapter.file_path)));
+            } else {
+                report.unchanged += 1;
+            }
+            if chapter.is_missing {
+                conn.execute(
+                    "UPDATE chapters SET is_missing = 0, updated_at = ?1 WHERE id = ?2",
+                    params![now(), chapter.id],
+                )
+                .map_err(db_error)?;
+            }
+            continue;
+        }
+
+        let current_version = get_chapter_version_by_id(conn, &chapter.current_version_id)?;
+        if let Some(index) = file_candidates
+            .iter()
+            .position(|(_, _, _, hash)| *hash == current_version.content_hash)
+        {
+            let (file_path, file_path_text, _, _) = file_candidates.remove(index);
+            let title = chapter_title_from_path(&file_path, report.added as usize);
+            conn.execute(
+                r#"
+                UPDATE chapters
+                SET file_path = ?1, title = ?2, is_missing = 0, updated_at = ?3
+                WHERE id = ?4
+                "#,
+                params![file_path_text, title, now(), chapter.id],
+            )
+            .map_err(|error| format!("Failed to update renamed chapter: {error}"))?;
+            report.renamed += 1;
+            report
+                .messages
+                .push(format!("Renamed: {} -> {}", chapter.title, title));
+        } else {
+            conn.execute(
+                "UPDATE chapters SET is_missing = 1, updated_at = ?1 WHERE id = ?2",
+                params![now(), chapter.id],
+            )
+            .map_err(db_error)?;
+            report.missing += 1;
+            report
+                .messages
+                .push(format!("Missing: {}", chapter_file_name_from_path(&chapter.file_path)));
+        }
+    }
+
+    let mut next_sort_index: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(sort_index), -1) + 1 FROM chapters WHERE book_id = ?1",
+            params![book_id],
+            |row| row.get(0),
+        )
+        .map_err(db_error)?;
+    let timestamp = now();
+    for (index, (file_path, file_path_text, content, content_hash)) in
+        file_candidates.into_iter().enumerate()
+    {
+        let chapter_id = new_id();
+        let version_id = new_id();
+        let title = chapter_title_from_path(&file_path, index);
+        conn.execute(
+            r#"
+            INSERT INTO chapters (
+                id, book_id, file_path, title, sort_index, current_version_id, is_missing, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?7)
+            "#,
+            params![
+                chapter_id,
+                book_id,
+                file_path_text,
+                title,
+                next_sort_index,
+                version_id,
+                timestamp
+            ],
+        )
+        .map_err(|error| format!("Failed to add new chapter: {error}"))?;
+        conn.execute(
+            r#"
+            INSERT INTO chapter_versions (id, chapter_id, content_hash, version_number, content_snapshot, label, created_at)
+            VALUES (?1, ?2, ?3, 1, ?4, '', ?5)
+            "#,
+            params![version_id, chapter_id, content_hash, content, timestamp],
+        )
+        .map_err(|error| format!("Failed to add new chapter version: {error}"))?;
+        next_sort_index += 1;
+        report.added += 1;
+        report.messages.push(format!("Added: {title}"));
+    }
+
+    conn.execute(
+        "UPDATE books SET updated_at = ?1 WHERE id = ?2",
+        params![now(), book_id],
+    )
+    .map_err(db_error)?;
+
+    Ok(report)
+}
+
 fn ensure_current_chapter_version(conn: &mut Connection, chapter_id: &str) -> AppResult<()> {
     let chapter = get_chapter_by_id(conn, chapter_id)?;
     let current_version = get_chapter_version_by_id(conn, &chapter.current_version_id)?;
@@ -1009,6 +1101,7 @@ fn read_chapter_payload(
             book_id: Some(chapter.book_id.clone()),
             chapter_id: Some(chapter.id.clone()),
             chapter_version_id: Some(version.id.clone()),
+            annotation_ids: None,
         },
     )?;
 
@@ -1044,7 +1137,7 @@ fn get_book_by_id(conn: &Connection, book_id: &str) -> AppResult<Book> {
 fn get_chapter_by_id(conn: &Connection, chapter_id: &str) -> AppResult<Chapter> {
     conn.query_row(
         r#"
-        SELECT id, book_id, file_path, title, sort_index, current_version_id, created_at, updated_at
+        SELECT id, book_id, file_path, title, sort_index, current_version_id, is_missing, created_at, updated_at
         FROM chapters
         WHERE id = ?1
         "#,
@@ -1058,7 +1151,7 @@ fn load_chapters(conn: &Connection, book_id: &str) -> AppResult<Vec<Chapter>> {
     let mut stmt = conn
         .prepare(
             r#"
-            SELECT id, book_id, file_path, title, sort_index, current_version_id, created_at, updated_at
+            SELECT id, book_id, file_path, title, sort_index, current_version_id, is_missing, created_at, updated_at
             FROM chapters
             WHERE book_id = ?1
             ORDER BY sort_index ASC, created_at ASC
@@ -1076,7 +1169,7 @@ fn get_chapter_version_by_id(
     chapter_version_id: &str,
 ) -> AppResult<ChapterVersion> {
     conn.query_row(
-        "SELECT id, chapter_id, content_hash, version_number, created_at FROM chapter_versions WHERE id = ?1",
+        "SELECT id, chapter_id, content_hash, version_number, label, created_at FROM chapter_versions WHERE id = ?1",
         params![chapter_version_id],
         map_chapter_version,
     )
@@ -1096,7 +1189,7 @@ fn load_chapter_versions(conn: &Connection, chapter_id: &str) -> AppResult<Vec<C
     let mut stmt = conn
         .prepare(
             r#"
-            SELECT id, chapter_id, content_hash, version_number, created_at
+            SELECT id, chapter_id, content_hash, version_number, label, created_at
             FROM chapter_versions
             WHERE chapter_id = ?1
             ORDER BY version_number DESC, created_at DESC
@@ -1126,6 +1219,7 @@ fn get_annotation_by_id(conn: &Connection, annotation_id: &str) -> AppResult<Ann
             highlight_color,
             comment,
             tags,
+            status,
             created_at,
             updated_at
         FROM annotations
@@ -1138,6 +1232,10 @@ fn get_annotation_by_id(conn: &Connection, annotation_id: &str) -> AppResult<Ann
 }
 
 fn load_annotations(conn: &Connection, scope: &AnnotationScope) -> AppResult<Vec<Annotation>> {
+    if let Some(annotation_ids) = &scope.annotation_ids {
+        return query_annotations_by_ids(conn, annotation_ids);
+    }
+
     match (&scope.book_id, &scope.chapter_id, &scope.chapter_version_id) {
         (_, _, Some(version_id)) => query_annotations(
             conn,
@@ -1156,6 +1254,42 @@ fn load_annotations(conn: &Connection, scope: &AnnotationScope) -> AppResult<Vec
         ),
         _ => query_annotations(conn, "ORDER BY created_at DESC", []),
     }
+}
+
+fn query_annotations_by_ids(conn: &Connection, annotation_ids: &[String]) -> AppResult<Vec<Annotation>> {
+    if annotation_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = repeat_placeholders(annotation_ids.len());
+    let sql = format!(
+        r#"
+        SELECT
+            id,
+            book_id,
+            chapter_id,
+            chapter_version_id,
+            selected_text,
+            start_offset,
+            end_offset,
+            context_before,
+            context_after,
+            heading_path,
+            highlight_color,
+            comment,
+            tags,
+            status,
+            created_at,
+            updated_at
+        FROM annotations
+        WHERE id IN ({placeholders})
+        ORDER BY created_at DESC
+        "#
+    );
+    let mut stmt = conn.prepare(&sql).map_err(db_error)?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(annotation_ids.iter()), map_annotation)
+        .map_err(db_error)?;
+    collect_rows(rows)
 }
 
 fn query_annotations<P>(
@@ -1182,6 +1316,7 @@ where
             highlight_color,
             comment,
             tags,
+            status,
             created_at,
             updated_at
         FROM annotations
@@ -1194,6 +1329,45 @@ where
 }
 
 fn load_export_rows(conn: &Connection, scope: &AnnotationScope) -> AppResult<Vec<ExportRow>> {
+    if let Some(annotation_ids) = &scope.annotation_ids {
+        if annotation_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = repeat_placeholders(annotation_ids.len());
+        let sql = format!(
+            r#"
+            SELECT
+                a.id,
+                a.book_id,
+                a.chapter_id,
+                a.chapter_version_id,
+                a.selected_text,
+                a.start_offset,
+                a.end_offset,
+                a.context_before,
+                a.context_after,
+                a.heading_path,
+                a.highlight_color,
+                a.comment,
+                a.tags,
+                a.status,
+                a.created_at,
+                a.updated_at,
+                c.title,
+                c.sort_index
+            FROM annotations a
+            JOIN chapters c ON c.id = a.chapter_id
+            WHERE a.id IN ({placeholders})
+            ORDER BY c.sort_index ASC, a.start_offset ASC, a.created_at ASC
+            "#
+        );
+        let mut stmt = conn.prepare(&sql).map_err(db_error)?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(annotation_ids.iter()), map_export_row)
+            .map_err(db_error)?;
+        return collect_rows(rows);
+    }
+
     let (where_clause, bind_value) = if let Some(version_id) = &scope.chapter_version_id {
         ("a.chapter_version_id = ?1".to_string(), version_id.clone())
     } else if let Some(chapter_id) = &scope.chapter_id {
@@ -1220,6 +1394,7 @@ fn load_export_rows(conn: &Connection, scope: &AnnotationScope) -> AppResult<Vec
             a.highlight_color,
             a.comment,
             a.tags,
+            a.status,
             a.created_at,
             a.updated_at,
             c.title,
@@ -1255,7 +1430,8 @@ fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
             page_padding,
             paragraph_spacing,
             surface,
-            border_style
+            border_style,
+            shortcut_bindings
         FROM settings
         WHERE id = 1
         "#,
@@ -1272,159 +1448,11 @@ fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
                 paragraph_spacing: row.get(7)?,
                 surface: row.get(8)?,
                 border_style: row.get(9)?,
+                shortcut_bindings: row.get(10)?,
             })
         },
     )
     .map_err(db_error)
-}
-
-fn render_export(template_id: &str, rows: &[ExportRow]) -> String {
-    let mut out = String::new();
-    out.push_str(&format!("# Loop Book Export\n\nGenerated at: {}\n\n", now()));
-
-    if rows.is_empty() {
-        out.push_str("_No annotations found for this scope._\n");
-        return out;
-    }
-
-    match template_id {
-        "ai-pack" => {
-            out.push_str("## AI Revision Packet\n\n");
-            for row in rows {
-                push_annotation_header(&mut out, row);
-                out.push_str("### Original Selection\n\n");
-                out.push_str("> ");
-                out.push_str(&row.annotation.selected_text.replace('\n', "\n> "));
-                out.push_str("\n\n### Context\n\n");
-                out.push_str("```text\n");
-                out.push_str(&format!(
-                    "{}{}{}\n",
-                    row.annotation.context_before,
-                    row.annotation.selected_text,
-                    row.annotation.context_after
-                ));
-                out.push_str("```\n\n### Reader Comment\n\n");
-                out.push_str(empty_marker(&row.annotation.comment));
-                out.push_str("\n\n### Suggested AI Task\n\n");
-                out.push_str("Revise the selected passage using the reader comment while preserving the chapter's voice and structure.\n\n");
-            }
-        }
-        "question-list" => {
-            out.push_str("## Question List\n\n");
-            for row in rows {
-                out.push_str(&format!(
-                    "- **{}** / {}: {}\n",
-                    row.chapter_title,
-                    fallback_heading(&row.annotation.heading_path),
-                    empty_marker(&row.annotation.comment)
-                ));
-            }
-        }
-        "annotation-index" => {
-            out.push_str("## Full Annotation Index\n\n");
-            for row in rows {
-                push_annotation_header(&mut out, row);
-                out.push_str(&format!(
-                    "- Range: `{}..{}`\n- Color: `{}`\n- Tags: `{}`\n\n",
-                    row.annotation.start_offset,
-                    row.annotation.end_offset,
-                    row.annotation.highlight_color,
-                    empty_marker(&row.annotation.tags)
-                ));
-                out.push_str(&format!(
-                    "> {}\n\n{}\n\n",
-                    row.annotation.selected_text.replace('\n', "\n> "),
-                    empty_marker(&row.annotation.comment)
-                ));
-            }
-        }
-        _ => {
-            out.push_str("## Reading Notes\n\n");
-            for row in rows {
-                push_annotation_header(&mut out, row);
-                out.push_str(&format!(
-                    "> {}\n\n{}\n\n",
-                    row.annotation.selected_text.replace('\n', "\n> "),
-                    empty_marker(&row.annotation.comment)
-                ));
-            }
-        }
-    }
-
-    out
-}
-
-fn push_annotation_header(out: &mut String, row: &ExportRow) {
-    out.push_str(&format!(
-        "## {}. {}\n\n",
-        row.chapter_sort_index + 1,
-        row.chapter_title
-    ));
-    if !row.annotation.heading_path.trim().is_empty() {
-        out.push_str(&format!("Path: `{}`\n\n", row.annotation.heading_path));
-    }
-}
-
-fn fallback_heading(heading_path: &str) -> &str {
-    if heading_path.trim().is_empty() {
-        "No heading"
-    } else {
-        heading_path
-    }
-}
-
-fn empty_marker(value: &str) -> &str {
-    if value.trim().is_empty() {
-        "_Empty_"
-    } else {
-        value
-    }
-}
-
-fn extract_outline(content: &str) -> Vec<OutlineItem> {
-    let mut outline = Vec::new();
-    let mut offset = 0usize;
-    for line in content.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with('#') {
-            let level = trimmed.chars().take_while(|char| *char == '#').count();
-            if (1..=6).contains(&level) && trimmed.chars().nth(level) == Some(' ') {
-                let title = trimmed[level..].trim().to_string();
-                outline.push(OutlineItem {
-                    level: level as i64,
-                    offset: offset as i64,
-                    id: slugify(&title, outline.len()),
-                    title,
-                });
-            }
-        }
-        offset += line.len() + 1;
-    }
-    outline
-}
-
-fn slugify(title: &str, index: usize) -> String {
-    let mut slug = title
-        .chars()
-        .filter_map(|char| {
-            if char.is_alphanumeric() {
-                Some(char.to_ascii_lowercase())
-            } else if char.is_whitespace() || char == '-' || char == '_' {
-                Some('-')
-            } else {
-                None
-            }
-        })
-        .collect::<String>();
-    while slug.contains("--") {
-        slug = slug.replace("--", "-");
-    }
-    slug = slug.trim_matches('-').to_string();
-    if slug.is_empty() {
-        format!("heading-{index}")
-    } else {
-        format!("{slug}-{index}")
-    }
 }
 
 fn map_book(row: &rusqlite::Row<'_>) -> rusqlite::Result<Book> {
@@ -1446,8 +1474,9 @@ fn map_chapter(row: &rusqlite::Row<'_>) -> rusqlite::Result<Chapter> {
         title: row.get(3)?,
         sort_index: row.get(4)?,
         current_version_id: row.get(5)?,
-        created_at: row.get(6)?,
-        updated_at: row.get(7)?,
+        is_missing: row.get::<_, i64>(6)? != 0,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
     })
 }
 
@@ -1457,7 +1486,8 @@ fn map_chapter_version(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChapterVersi
         chapter_id: row.get(1)?,
         content_hash: row.get(2)?,
         version_number: row.get(3)?,
-        created_at: row.get(4)?,
+        label: row.get(4)?,
+        created_at: row.get(5)?,
     })
 }
 
@@ -1476,43 +1506,16 @@ fn map_annotation(row: &rusqlite::Row<'_>) -> rusqlite::Result<Annotation> {
         highlight_color: row.get(10)?,
         comment: row.get(11)?,
         tags: row.get(12)?,
-        created_at: row.get(13)?,
-        updated_at: row.get(14)?,
+        status: row.get(13)?,
+        created_at: row.get(14)?,
+        updated_at: row.get(15)?,
     })
 }
 
 fn map_export_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ExportRow> {
     Ok(ExportRow {
         annotation: map_annotation(row)?,
-        chapter_title: row.get(15)?,
-        chapter_sort_index: row.get(16)?,
+        chapter_title: row.get(16)?,
+        chapter_sort_index: row.get(17)?,
     })
-}
-
-fn collect_rows<T, F>(rows: rusqlite::MappedRows<'_, F>) -> AppResult<Vec<T>>
-where
-    F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
-{
-    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
-}
-
-fn path_to_string(path: &Path) -> String {
-    path.to_string_lossy().to_string()
-}
-
-fn hash_content(content: &str) -> String {
-    let digest = Sha256::digest(content.as_bytes());
-    format!("{digest:x}")
-}
-
-fn now() -> String {
-    Utc::now().to_rfc3339()
-}
-
-fn new_id() -> String {
-    Uuid::new_v4().to_string()
-}
-
-fn db_error(error: rusqlite::Error) -> String {
-    format!("Database error: {error}")
 }

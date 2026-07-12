@@ -3,11 +3,16 @@ import type {
   Annotation,
   AnnotationPayload,
   AnnotationScope,
+  AnnotationStatus,
   AppSettings,
+  BackupResult,
   Book,
   BookSummary,
   Chapter,
+  ChapterVersion,
+  ExportTaskGoal,
   ExportTemplate,
+  FolderSyncReport,
   NoteItem,
   ReadChapterResponse,
   ReadingProgress,
@@ -29,6 +34,14 @@ export async function getBook(bookId: string) {
   return invoke<Book>("get_book", { bookId });
 }
 
+export async function updateBookName(bookId: string, name: string) {
+  return invoke<Book>("update_book_name", { bookId, name });
+}
+
+export async function syncBookFolder(bookId: string) {
+  return invoke<FolderSyncReport>("sync_book_folder", { bookId });
+}
+
 export async function listChapters(bookId: string) {
   return invoke<Chapter[]>("list_chapters", { bookId });
 }
@@ -45,15 +58,31 @@ export async function readChapterVersion(chapterVersionId: string) {
   return invoke<ReadChapterResponse>("read_chapter_version", { chapterVersionId });
 }
 
+export async function listChapterVersions(chapterId: string) {
+  return invoke<ChapterVersion[]>("list_chapter_versions", { chapterId });
+}
+
+export async function updateChapterVersionLabel(chapterVersionId: string, label: string) {
+  return invoke<ChapterVersion>("update_chapter_version_label", { chapterVersionId, label });
+}
+
+export async function deleteChapterVersion(chapterVersionId: string) {
+  return invoke<void>("delete_chapter_version", { chapterVersionId });
+}
+
 export async function createAnnotation(payload: AnnotationPayload) {
   return invoke<Annotation>("create_annotation", { payload });
 }
 
 export async function updateAnnotation(
   annotationId: string,
-  patch: Partial<Pick<Annotation, "highlightColor" | "comment" | "tags">>,
+  patch: Partial<Pick<Annotation, "highlightColor" | "comment" | "tags" | "status">>,
 ) {
   return invoke<Annotation>("update_annotation", { annotationId, patch });
+}
+
+export async function markAnnotationsStatus(annotationIds: string[], status: AnnotationStatus) {
+  return invoke<void>("mark_annotations_status", { annotationIds, status });
 }
 
 export async function deleteAnnotation(annotationId: string) {
@@ -68,8 +97,20 @@ export async function listNoteItems() {
   return invoke<NoteItem[]>("list_note_items");
 }
 
-export async function exportAnnotations(scope: AnnotationScope, templateId: ExportTemplate) {
-  return invoke<string>("export_annotations", { scope, templateId });
+export async function exportAnnotations(
+  scope: AnnotationScope,
+  templateId: ExportTemplate,
+  taskGoal?: ExportTaskGoal,
+) {
+  return invoke<string>("export_annotations", { scope, templateId, taskGoal });
+}
+
+export async function exportBackup() {
+  return invoke<BackupResult>("export_backup");
+}
+
+export async function restoreBackup() {
+  return invoke<BackupResult>("restore_backup");
 }
 
 export async function getSettings() {
