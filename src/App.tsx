@@ -128,6 +128,13 @@ interface ReaderSearchMatch {
   excerpt: string;
 }
 
+type ViewTransitionDocument = Document & {
+  startViewTransition?: (callback: () => void) => { finished: Promise<void> };
+};
+
+const uiExitMs = 150;
+const readerMotionMs = 220;
+
 function AppTitlebar({ title, subtitle }: { title: string; subtitle: string }) {
   function handleDrag(event: ReactMouseEvent<HTMLDivElement>) {
     if (event.button !== 0) return;
@@ -200,10 +207,14 @@ export default function App() {
   const [reader, setReader] = useState<ReadChapterResponse | null>(null);
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
   const [homeSettingsOpen, setHomeSettingsOpen] = useState(false);
+  const [homeSettingsClosing, setHomeSettingsClosing] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsClosing, setSettingsClosing] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [searchClosing, setSearchClosing] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [bookMenu, setBookMenu] = useState<BookMenuState | null>(null);
+  const [bookMenuClosing, setBookMenuClosing] = useState(false);
   const [renameBookDraft, setRenameBookDraft] = useState<RenameBookState | null>(null);
   const [deleteBookDraft, setDeleteBookDraft] = useState<BookSummary | null>(null);
   const [syncReport, setSyncReport] = useState<FolderSyncReport | null>(null);
@@ -213,6 +224,7 @@ export default function App() {
   const [draft, setDraft] = useState<SelectionDraft | null>(null);
   const [pendingDraft, setPendingDraft] = useState<SelectionDraft | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [contextMenuClosing, setContextMenuClosing] = useState(false);
   const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
   const [activeSearchHighlight, setActiveSearchHighlight] = useState<
     (SearchHighlight & { chapterVersionId: string }) | null
@@ -232,7 +244,9 @@ export default function App() {
   const [readerSearchQuery, setReaderSearchQuery] = useState("");
   const [readerSearchMatches, setReaderSearchMatches] = useState<ReaderSearchMatch[]>([]);
   const [activeReaderSearchIndex, setActiveReaderSearchIndex] = useState(-1);
+  const [readerMotion, setReaderMotion] = useState<"content" | "jump" | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
+  const [exportClosing, setExportClosing] = useState(false);
   const [exportTemplate, setExportTemplate] = useState<ExportTemplate>("reading-notes");
   const [exportTaskGoal, setExportTaskGoal] = useState<ExportTaskGoal>("rewrite");
   const [exportPresetId, setExportPresetId] = useState("");
@@ -243,6 +257,7 @@ export default function App() {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [pendingScroll, setPendingScroll] = useState<number | null>(null);
+  const [noteDetailClosing, setNoteDetailClosing] = useState(false);
 
   const articleRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -250,9 +265,18 @@ export default function App() {
   const readerRightRef = useRef<HTMLElement | null>(null);
   const readerSearchInputRef = useRef<HTMLInputElement | null>(null);
   const importDropRef = useRef<HTMLButtonElement | null>(null);
+  const readerMotionTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     void boot();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (readerMotionTimerRef.current !== null) {
+        window.clearTimeout(readerMotionTimerRef.current);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -310,7 +334,7 @@ export default function App() {
 
   useEffect(() => {
     if (!contextMenu) return;
-    const close = () => setContextMenu(null);
+    const close = () => closeSelectionContextMenu();
     window.addEventListener("click", close);
     window.addEventListener("scroll", close, true);
     return () => {
@@ -321,7 +345,7 @@ export default function App() {
 
   useEffect(() => {
     if (!bookMenu) return;
-    const close = () => setBookMenu(null);
+    const close = () => closeBookMenu();
     window.addEventListener("click", close);
     window.addEventListener("scroll", close, true);
     return () => {
@@ -649,9 +673,11 @@ export default function App() {
         nextReader = await readChapter(nextChapters[0].id);
         setPendingScroll(0);
       }
-      setActiveBook(book);
-      setChapters(nextChapters);
-      setReader(nextReader);
+      runViewTransition(() => {
+        setActiveBook(book);
+        setChapters(nextChapters);
+        setReader(nextReader);
+      });
     } catch (err) {
       setError(readError(err));
     } finally {
@@ -673,22 +699,24 @@ export default function App() {
         readChapter(note.chapterId),
       );
       const book = books.find((item) => item.id === note.bookId);
-      setActiveBook(
-        book ?? {
-          id: note.bookId,
-          name: note.bookName,
-          rootPath: "",
-          viewMode: "grid",
-          isPinned: false,
-          createdAt: note.createdAt,
-          updatedAt: note.updatedAt,
-          chapterCount: nextChapters.length,
-          annotationCount: notes.filter((item) => item.bookId === note.bookId).length,
-        },
-      );
-      setChapters(nextChapters);
-      setReader(nextReader);
-      setActiveAnnotationId(note.id);
+      runViewTransition(() => {
+        setActiveBook(
+          book ?? {
+            id: note.bookId,
+            name: note.bookName,
+            rootPath: "",
+            viewMode: "grid",
+            isPinned: false,
+            createdAt: note.createdAt,
+            updatedAt: note.updatedAt,
+            chapterCount: nextChapters.length,
+            annotationCount: notes.filter((item) => item.bookId === note.bookId).length,
+          },
+        );
+        setChapters(nextChapters);
+        setReader(nextReader);
+      });
+      selectReaderAnnotation(note.id);
       setPendingScroll(0);
     } catch (err) {
       setError(readError(err));
@@ -712,27 +740,30 @@ export default function App() {
         readChapter(result.chapterId),
       );
       const book = books.find((item) => item.id === result.bookId);
-      setActiveBook(
-        book ?? {
-          id: result.bookId,
-          name: result.bookName,
-          rootPath: "",
-          viewMode: "grid",
-          isPinned: false,
-          createdAt: "",
-          updatedAt: "",
-          chapterCount: nextChapters.length,
-          annotationCount: notes.filter((item) => item.bookId === result.bookId).length,
-        },
-      );
-      setChapters(nextChapters);
-      setReader(nextReader);
+      runViewTransition(() => {
+        setActiveBook(
+          book ?? {
+            id: result.bookId,
+            name: result.bookName,
+            rootPath: "",
+            viewMode: "grid",
+            isPinned: false,
+            createdAt: "",
+            updatedAt: "",
+            chapterCount: nextChapters.length,
+            annotationCount: notes.filter((item) => item.bookId === result.bookId).length,
+          },
+        );
+        setChapters(nextChapters);
+        setReader(nextReader);
+      });
       setActiveSearchHighlight({
         chapterVersionId: result.chapterVersionId,
         startOffset: result.startOffset,
         endOffset: result.endOffset,
         matchedText: result.matchedText,
       });
+      playReaderMotion("jump");
       setPendingScroll(null);
     } catch (err) {
       setError(readError(err));
@@ -748,6 +779,7 @@ export default function App() {
     setActiveSearchHighlight(null);
     try {
       const nextReader = await readChapter(chapterId);
+      playReaderMotion("content");
       setReader(nextReader);
       setPendingScroll(0);
     } catch (err) {
@@ -763,6 +795,7 @@ export default function App() {
     setActiveSearchHighlight(null);
     try {
       const nextReader = await readChapterVersion(chapterVersionId);
+      playReaderMotion("content");
       setReader(nextReader);
       setPendingScroll(0);
     } catch (err) {
@@ -775,7 +808,7 @@ export default function App() {
   function handleTextSelection() {
     const nextDraft = buildDraftFromSelection(false);
     setPendingDraft(nextDraft);
-    setContextMenu(null);
+    closeSelectionContextMenu();
   }
 
   function handleReaderContextMenu(event: React.MouseEvent<HTMLDivElement>) {
@@ -783,10 +816,11 @@ export default function App() {
     event.preventDefault();
     const nextDraft = buildDraftFromSelection(true) ?? pendingDraft;
     if (!nextDraft) {
-      setContextMenu(null);
+      closeSelectionContextMenu();
       return;
     }
     setPendingDraft(nextDraft);
+    setContextMenuClosing(false);
     setContextMenu({
       x: Math.min(event.clientX, window.innerWidth - 156),
       y: Math.min(event.clientY, window.innerHeight - 56),
@@ -836,7 +870,7 @@ export default function App() {
   function openPendingDraft() {
     if (!pendingDraft) return;
     setDraft(pendingDraft);
-    setContextMenu(null);
+    closeSelectionContextMenu();
   }
 
   async function saveDraft() {
@@ -874,7 +908,7 @@ export default function App() {
       });
       setDraft(null);
       setPendingDraft(null);
-      setContextMenu(null);
+      closeSelectionContextMenu();
       window.getSelection()?.removeAllRanges();
       void refreshNotes();
     } catch (err) {
@@ -918,7 +952,8 @@ export default function App() {
     const target = event.target as HTMLElement;
     const mark = target.closest<HTMLElement>("[data-annotation-id]");
     if (mark) {
-      setActiveAnnotationId(mark.dataset.annotationId ?? null);
+      const annotationId = mark.dataset.annotationId;
+      if (annotationId) selectReaderAnnotation(annotationId);
     }
   }
 
@@ -966,6 +1001,7 @@ export default function App() {
     const headings = articleRef.current.querySelectorAll("h1, h2, h3, h4, h5, h6");
     for (const heading of headings) {
       if (heading.textContent?.trim() === title) {
+        playReaderMotion("jump");
         heading.scrollIntoView({ behavior: "smooth", block: "start" });
         return;
       }
@@ -1156,6 +1192,7 @@ export default function App() {
 
   function handleBookContextMenu(event: React.MouseEvent, book: BookSummary) {
     event.preventDefault();
+    setBookMenuClosing(false);
     setBookMenu({
       book,
       x: Math.min(event.clientX, window.innerWidth - 190),
@@ -1182,7 +1219,7 @@ export default function App() {
   async function openBookInExplorer(book: BookSummary) {
     setBusy(true);
     setError("");
-    setBookMenu(null);
+    closeBookMenu();
     try {
       await openBookFolder(book.id);
     } catch (err) {
@@ -1196,7 +1233,7 @@ export default function App() {
     const nextPinned = !book.isPinned;
     setBusy(true);
     setError("");
-    setBookMenu(null);
+    closeBookMenu();
     try {
       await updateBookPinned(book.id, nextPinned);
       await refreshBooks();
@@ -1233,7 +1270,7 @@ export default function App() {
   async function syncBook(book: BookSummary) {
     setBusy(true);
     setError("");
-    setBookMenu(null);
+    closeBookMenu();
     try {
       const report = await syncBookFolder(book.id);
       setSyncReport(report);
@@ -1336,12 +1373,93 @@ export default function App() {
 
   function openSearchModal() {
     setSearchQuery("");
+    setSearchClosing(false);
     setSearchOpen(true);
   }
 
   function closeSearchModal() {
-    setSearchOpen(false);
-    setSearchQuery("");
+    animateClose(setSearchClosing, () => {
+      setSearchOpen(false);
+      setSearchQuery("");
+    });
+  }
+
+  function openHomeSettingsModal() {
+    setHomeSettingsClosing(false);
+    setHomeSettingsOpen(true);
+  }
+
+  function closeHomeSettingsModal() {
+    animateClose(setHomeSettingsClosing, () => setHomeSettingsOpen(false));
+  }
+
+  function openReaderSettingsPanel() {
+    setSettingsClosing(false);
+    setSettingsOpen(true);
+  }
+
+  function closeReaderSettingsPanel() {
+    animateClose(setSettingsClosing, () => setSettingsOpen(false));
+  }
+
+  function openExportModal() {
+    setExportClosing(false);
+    setExportText("");
+    setExportOpen(true);
+  }
+
+  function closeExportModal() {
+    animateClose(setExportClosing, () => setExportOpen(false));
+  }
+
+  function closeWorkbenchNoteDetail() {
+    animateClose(setNoteDetailClosing, () => setWorkbenchNoteDetail(null));
+  }
+
+  function openWorkbenchNoteDetail(note: NoteItem) {
+    setNoteDetailClosing(false);
+    setWorkbenchNoteDetail(note);
+  }
+
+  function closeBookMenu() {
+    if (!bookMenu) return;
+    animateClose(setBookMenuClosing, () => setBookMenu(null));
+  }
+
+  function closeSelectionContextMenu() {
+    if (!contextMenu) return;
+    animateClose(setContextMenuClosing, () => setContextMenu(null));
+  }
+
+  function runViewTransition(callback: () => void) {
+    const startViewTransition = (document as ViewTransitionDocument).startViewTransition;
+    if (typeof startViewTransition === "function") {
+      startViewTransition.call(document, callback);
+      return;
+    }
+    callback();
+  }
+
+  function animateClose(setClosing: (closing: boolean) => void, finish: () => void) {
+    setClosing(true);
+    window.setTimeout(() => {
+      finish();
+      setClosing(false);
+    }, uiExitMs);
+  }
+
+  function playReaderMotion(kind: "content" | "jump") {
+    if (readerMotionTimerRef.current !== null) {
+      window.clearTimeout(readerMotionTimerRef.current);
+    }
+    setReaderMotion(null);
+    window.requestAnimationFrame(() => {
+      setReaderMotion(kind);
+      readerMotionTimerRef.current = window.setTimeout(() => {
+        setReaderMotion(null);
+        readerMotionTimerRef.current = null;
+      }, readerMotionMs);
+    });
   }
 
   function focusReaderSearchInput() {
@@ -1360,8 +1478,14 @@ export default function App() {
 
   function selectReaderSearchMatch(index: number) {
     if (!readerSearchMatches[index]) return;
+    playReaderMotion("jump");
     setActiveSearchHighlight(null);
     setActiveReaderSearchIndex(index);
+  }
+
+  function selectReaderAnnotation(annotationId: string) {
+    playReaderMotion("jump");
+    setActiveAnnotationId(annotationId);
   }
 
   function handleReaderSearchKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
@@ -1421,7 +1545,7 @@ export default function App() {
       return;
     }
     if (action === "export") {
-      if (reader) setExportOpen(true);
+      if (reader) openExportModal();
       return;
     }
     if (action === "toggleLeft") {
@@ -1454,7 +1578,7 @@ export default function App() {
             <button
               className={`icon-button ${homeView === "grid" ? "active" : ""}`}
               title="画廊视图"
-              onClick={() => setHomeView("grid")}
+              onClick={() => runViewTransition(() => setHomeView("grid"))}
             >
               <Grid3X3 size={18} />
             </button>
@@ -1462,13 +1586,13 @@ export default function App() {
               className={`icon-button ${homeView === "notes" ? "active" : ""}`}
               title="笔记视图"
               onClick={() => {
-                setHomeView("notes");
+                runViewTransition(() => setHomeView("notes"));
                 void refreshNotes();
               }}
             >
               <MessageSquare size={18} />
             </button>
-            <button className="icon-button" title="设置" onClick={() => setHomeSettingsOpen(true)}>
+            <button className="icon-button" title="设置" onClick={openHomeSettingsModal}>
               <Settings size={18} />
             </button>
           </div>
@@ -1503,7 +1627,7 @@ export default function App() {
             onCommentOnlyChange={setCommentOnly}
             onToggleNote={toggleNoteSelection}
             onToggleAll={toggleAllFilteredNotes}
-            onOpenNote={setWorkbenchNoteDetail}
+            onOpenNote={openWorkbenchNoteDetail}
             onExportSelected={() => void exportSelectedNotes()}
             onMarkStatus={(status) => void updateSelectedNoteStatus(status)}
           />
@@ -1541,20 +1665,21 @@ export default function App() {
         {bookMenu && (
           <BookContextMenu
             menu={bookMenu}
+            closing={bookMenuClosing}
             onTogglePinned={() => void toggleBookPinned(bookMenu.book)}
             onRename={() => {
               setRenameBookDraft({ book: bookMenu.book, name: bookMenu.book.name });
-              setBookMenu(null);
+              closeBookMenu();
             }}
             onOpenFolder={() => void openBookInExplorer(bookMenu.book)}
             onSync={() => void syncBook(bookMenu.book)}
             onVersions={() => {
               setVersionManagerBook(bookMenu.book);
-              setBookMenu(null);
+              closeBookMenu();
             }}
             onDelete={() => {
               setDeleteBookDraft(bookMenu.book);
-              setBookMenu(null);
+              closeBookMenu();
             }}
           />
         )}
@@ -1585,6 +1710,7 @@ export default function App() {
         )}
         {homeSettingsOpen && (
           <HomeSettingsModal
+            closing={homeSettingsClosing}
             settings={settings}
             exportPresets={exportPresets}
             busy={busy}
@@ -1593,22 +1719,24 @@ export default function App() {
             onChange={applySettings}
             onSaveExportPreset={saveExportPreset}
             onDeleteExportPreset={removeExportPreset}
-            onClose={() => setHomeSettingsOpen(false)}
+            onClose={closeHomeSettingsModal}
           />
         )}
         {workbenchNoteDetail && (
           <NoteDetailModal
+            closing={noteDetailClosing}
             note={workbenchNoteDetail}
-            onClose={() => setWorkbenchNoteDetail(null)}
+            onClose={closeWorkbenchNoteDetail}
             onJump={() => {
               const note = workbenchNoteDetail;
-              setWorkbenchNoteDetail(null);
+              closeWorkbenchNoteDetail();
               void openNote(note);
             }}
           />
         )}
         {searchOpen && (
           <SearchModal
+            closing={searchClosing}
             query={searchQuery}
             books={books}
             notes={notes}
@@ -1658,8 +1786,10 @@ export default function App() {
       <aside className="reader-left" ref={readerLeftRef}>
         <div className="reader-bookbar">
           <button className="icon-button" title="返回首页" onClick={() => {
-            setActiveBook(null);
-            setReader(null);
+            runViewTransition(() => {
+              setActiveBook(null);
+              setReader(null);
+            });
             void refreshBooks();
             void refreshNotes();
           }}>
@@ -1763,20 +1893,22 @@ export default function App() {
             <button
               className="icon-button"
               title="导出批注"
-              onClick={() => {
-                setExportOpen(true);
-                setExportText("");
-              }}
+              onClick={openExportModal}
             >
               <Download size={18} />
             </button>
-            <button className="icon-button" title="阅读器设置" onClick={() => setSettingsOpen(true)}>
+            <button className="icon-button" title="阅读器设置" onClick={openReaderSettingsPanel}>
               <Settings size={18} />
             </button>
           </div>
         </header>
 
-        <div className={`reading-surface border-${settings.borderStyle}`} ref={scrollRef}>
+        <div
+          className={`reading-surface border-${settings.borderStyle} ${
+            readerMotion ? `reader-motion-${readerMotion}` : ""
+          }`}
+          ref={scrollRef}
+        >
           {reader && (
             <div className="reading-stats" aria-live="polite">
               <span>本文共 {readerStats.wordCount.toLocaleString()} 字</span>
@@ -1838,7 +1970,7 @@ export default function App() {
                   key={annotation.id}
                   annotation={annotation}
                   active={annotation.id === activeAnnotationId}
-                  onOpen={() => setActiveAnnotationId(annotation.id)}
+                  onOpen={() => selectReaderAnnotation(annotation.id)}
                 />
               ))
             ) : (
@@ -1912,6 +2044,7 @@ export default function App() {
       )}
       {exportOpen && (
         <ExportModal
+          closing={exportClosing}
           scope={exportScope}
           template={exportTemplate}
           taskGoal={exportTaskGoal}
@@ -1926,18 +2059,20 @@ export default function App() {
           onPresetChange={setExportPresetId}
           onExport={() => void handleExport()}
           onCopy={() => void copyExport()}
-          onClose={() => setExportOpen(false)}
+          onClose={closeExportModal}
         />
       )}
       {settingsOpen && (
         <SettingsPanel
+          closing={settingsClosing}
           settings={settings}
           onChange={applySettings}
-          onClose={() => setSettingsOpen(false)}
+          onClose={closeReaderSettingsPanel}
         />
       )}
       {searchOpen && (
         <SearchModal
+          closing={searchClosing}
           query={searchQuery}
           books={books}
           notes={notes}
@@ -1959,7 +2094,7 @@ export default function App() {
       )}
       {contextMenu && pendingDraft && (
         <div
-          className="selection-menu"
+          className={`selection-menu ${contextMenuClosing ? "is-closing" : ""}`}
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onClick={(event) => event.stopPropagation()}
         >

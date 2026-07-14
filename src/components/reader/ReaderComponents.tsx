@@ -142,6 +142,7 @@ export function SortChaptersModal({
 }
 
 export function ExportModal({
+  closing,
   scope,
   template,
   taskGoal,
@@ -158,6 +159,7 @@ export function ExportModal({
   onCopy,
   onClose,
 }: {
+  closing: boolean;
   scope: "chapter" | "book";
   template: ExportTemplate;
   taskGoal: ExportTaskGoal;
@@ -178,7 +180,7 @@ export function ExportModal({
 
   return (
     <div
-      className="modal-backdrop"
+      className={`modal-backdrop ${closing ? "is-closing" : ""}`}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) {
           onClose();
@@ -383,17 +385,19 @@ export function AnnotationDetailModal({
 }
 
 export function SettingsPanel({
+  closing,
   settings,
   onChange,
   onClose,
 }: {
+  closing: boolean;
   settings: AppSettings;
   onChange: (patch: Partial<AppSettings>) => void;
   onClose: () => void;
 }) {
   return (
     <div
-      className="settings-backdrop"
+      className={`settings-backdrop ${closing ? "is-closing" : ""}`}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) {
           onClose();

@@ -135,6 +135,7 @@ const themeOptions = [
 
 export function BookContextMenu({
   menu,
+  closing,
   onTogglePinned,
   onRename,
   onOpenFolder,
@@ -143,6 +144,7 @@ export function BookContextMenu({
   onDelete,
 }: {
   menu: BookMenuState;
+  closing: boolean;
   onTogglePinned: () => void;
   onRename: () => void;
   onOpenFolder: () => void;
@@ -151,7 +153,11 @@ export function BookContextMenu({
   onDelete: () => void;
 }) {
   return (
-    <div className="context-menu" style={{ left: menu.x, top: menu.y }} onClick={(event) => event.stopPropagation()}>
+    <div
+      className={`context-menu ${closing ? "is-closing" : ""}`}
+      style={{ left: menu.x, top: menu.y }}
+      onClick={(event) => event.stopPropagation()}
+    >
       <button onClick={onTogglePinned}>
         {menu.book.isPinned ? <PinOff size={15} /> : <Pin size={15} />}
         {menu.book.isPinned ? "取消置顶" : "置顶"}
@@ -304,6 +310,7 @@ export function SyncReportModal({ report, onClose }: { report: FolderSyncReport;
 }
 
 export function HomeSettingsModal({
+  closing,
   settings,
   exportPresets,
   busy,
@@ -314,6 +321,7 @@ export function HomeSettingsModal({
   onDeleteExportPreset,
   onClose,
 }: {
+  closing: boolean;
   settings: AppSettings;
   exportPresets: ExportPreset[];
   busy: boolean;
@@ -410,7 +418,10 @@ export function HomeSettingsModal({
   };
 
   return (
-    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <div
+      className={`modal-backdrop ${closing ? "is-closing" : ""}`}
+      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+    >
       <section className="annotation-modal home-settings-modal" onMouseDown={(event) => event.stopPropagation()}>
         <header>
           <div>
@@ -614,6 +625,7 @@ function readableShortcutKey(key: string) {
 }
 
 export function SearchModal({
+  closing,
   query,
   books,
   notes,
@@ -623,6 +635,7 @@ export function SearchModal({
   onOpenNote,
   onOpenContentResult,
 }: {
+  closing: boolean;
   query: string;
   books: BookSummary[];
   notes: NoteItem[];
@@ -790,7 +803,10 @@ export function SearchModal({
   }
 
   return (
-    <div className="modal-backdrop search-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <div
+      className={`modal-backdrop search-backdrop ${closing ? "is-closing" : ""}`}
+      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+    >
       <section className="search-modal" onMouseDown={(event) => event.stopPropagation()}>
         <div className="search-box">
           <Search size={18} />
@@ -885,16 +901,21 @@ export function BatchExportModal({
 }
 
 export function NoteDetailModal({
+  closing,
   note,
   onClose,
   onJump,
 }: {
+  closing: boolean;
   note: NoteItem;
   onClose: () => void;
   onJump: () => void;
 }) {
   return (
-    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <div
+      className={`modal-backdrop ${closing ? "is-closing" : ""}`}
+      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+    >
       <section className="annotation-modal note-detail-modal" onMouseDown={(event) => event.stopPropagation()}>
         <header>
           <div>
