@@ -3,9 +3,11 @@ import MarkdownIt from "markdown-it";
 import type { Annotation } from "./types";
 
 export interface SearchHighlight {
+  id?: string;
   startOffset: number;
   endOffset: number;
   matchedText: string;
+  active?: boolean;
 }
 
 export interface RenderedSelectionAnchor {
@@ -22,6 +24,7 @@ interface DomHighlightRange {
   className: string;
   color?: string;
   search?: boolean;
+  active?: boolean;
 }
 
 interface TextNodeSpan {
@@ -99,7 +102,7 @@ export function getContextFromText(content: string, start: number, end: number, 
 export function applyDomHighlights(
   root: HTMLElement,
   annotations: Annotation[],
-  searchHighlight?: SearchHighlight | null,
+  searchHighlights?: SearchHighlight | SearchHighlight[] | null,
 ) {
   clearDomHighlights(root);
   const rootText = root.textContent ?? "";
@@ -108,16 +111,23 @@ export function applyDomHighlights(
     .filter((range): range is DomHighlightRange => Boolean(range));
   const normalizedAnnotationRanges = normalizeNonOverlappingRanges(annotationRanges, rootText.length);
   const ranges = [...normalizedAnnotationRanges];
-  const searchRange = resolveSearchRange(rootText, searchHighlight);
-  if (
-    searchRange &&
-    !normalizedAnnotationRanges.some(
-      (range) =>
-        searchRange.startOffset < range.endOffset &&
-        searchRange.endOffset > range.startOffset,
-    )
-  ) {
-    ranges.push(searchRange);
+  const searchRanges = (Array.isArray(searchHighlights)
+    ? searchHighlights
+    : searchHighlights
+      ? [searchHighlights]
+      : [])
+    .map((highlight) => resolveSearchRange(rootText, highlight))
+    .filter((range): range is DomHighlightRange => Boolean(range))
+    .filter(
+      (searchRange) =>
+        !normalizedAnnotationRanges.some(
+          (range) =>
+            searchRange.startOffset < range.endOffset &&
+            searchRange.endOffset > range.startOffset,
+        ),
+    );
+  if (searchRanges.length > 0) {
+    ranges.push(...normalizeNonOverlappingRanges(searchRanges, rootText.length));
   }
 
   wrapDomRanges(root, ranges);
@@ -325,20 +335,24 @@ function resolveSearchRange(
       searchHighlight.matchedText
   ) {
     return {
+      id: searchHighlight.id,
       startOffset: searchHighlight.startOffset,
       endOffset: searchHighlight.endOffset,
-      className: "search-hit-mark",
+      className: searchHighlight.active ? "search-hit-mark is-active" : "search-hit-mark",
       search: true,
+      active: searchHighlight.active,
     };
   }
 
   const start = rootText.indexOf(searchHighlight.matchedText);
   if (start < 0) return null;
   return {
+    id: searchHighlight.id,
     startOffset: start,
     endOffset: start + searchHighlight.matchedText.length,
-    className: "search-hit-mark",
+    className: searchHighlight.active ? "search-hit-mark is-active" : "search-hit-mark",
     search: true,
+    active: searchHighlight.active,
   };
 }
 
@@ -472,8 +486,12 @@ function wrapTextNodeSegments(node: Text, segments: TextNodeSegment[]) {
     }
     const mark = document.createElement("mark");
     mark.className = segment.range.className;
-    if (segment.range.id) mark.dataset.annotationId = segment.range.id;
-    if (segment.range.search) mark.dataset.searchHit = "true";
+    if (segment.range.search) {
+      mark.dataset.searchHit = segment.range.active ? "active" : "true";
+      if (segment.range.id) mark.dataset.searchId = segment.range.id;
+    } else if (segment.range.id) {
+      mark.dataset.annotationId = segment.range.id;
+    }
     if (segment.range.color) mark.style.setProperty("--mark-color", segment.range.color);
     mark.textContent = node.data.slice(segment.startOffset, segment.endOffset);
     fragment.append(mark);

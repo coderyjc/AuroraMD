@@ -10,6 +10,7 @@ import {
   Highlighter,
   MessageSquare,
   Minus,
+  Search,
   Settings,
   Square,
   X,
@@ -18,6 +19,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   useEffect,
@@ -118,6 +120,14 @@ interface ContextMenuState {
 
 type ReaderBook = Book | BookSummary;
 
+interface ReaderSearchMatch {
+  id: string;
+  startOffset: number;
+  endOffset: number;
+  matchedText: string;
+  excerpt: string;
+}
+
 function AppTitlebar({ title, subtitle }: { title: string; subtitle: string }) {
   function handleDrag(event: ReactMouseEvent<HTMLDivElement>) {
     if (event.button !== 0) return;
@@ -215,7 +225,13 @@ export default function App() {
   const [leftPaneWidth, setLeftPaneWidth] = useState(284);
   const [rightPaneWidth, setRightPaneWidth] = useState(344);
   const [chapterPaneHeight, setChapterPaneHeight] = useState(320);
-  const [resizeTarget, setResizeTarget] = useState<"left" | "right" | "chapters" | null>(null);
+  const [readerSearchPaneHeight, setReaderSearchPaneHeight] = useState(260);
+  const [resizeTarget, setResizeTarget] = useState<
+    "left" | "right" | "chapters" | "readerSearch" | null
+  >(null);
+  const [readerSearchQuery, setReaderSearchQuery] = useState("");
+  const [readerSearchMatches, setReaderSearchMatches] = useState<ReaderSearchMatch[]>([]);
+  const [activeReaderSearchIndex, setActiveReaderSearchIndex] = useState(-1);
   const [exportOpen, setExportOpen] = useState(false);
   const [exportTemplate, setExportTemplate] = useState<ExportTemplate>("reading-notes");
   const [exportTaskGoal, setExportTaskGoal] = useState<ExportTaskGoal>("rewrite");
@@ -231,6 +247,8 @@ export default function App() {
   const articleRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const readerLeftRef = useRef<HTMLElement | null>(null);
+  const readerRightRef = useRef<HTMLElement | null>(null);
+  const readerSearchInputRef = useRef<HTMLInputElement | null>(null);
   const importDropRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
@@ -369,10 +387,25 @@ export default function App() {
     if (!reader || !activeSearchHighlight || !articleRef.current) return;
     const frame = window.requestAnimationFrame(() => {
       const mark = articleRef.current?.querySelector<HTMLElement>("[data-search-hit='true']");
-      mark?.scrollIntoView({ behavior: "smooth", block: "center" });
+      const activeMark =
+        articleRef.current?.querySelector<HTMLElement>('[data-search-id="global-search"]') ?? mark;
+      activeMark?.scrollIntoView({ behavior: "smooth", block: "center" });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [activeSearchHighlight, reader]);
+
+  useEffect(() => {
+    if (!reader || activeReaderSearchIndex < 0 || !articleRef.current) return;
+    const match = readerSearchMatches[activeReaderSearchIndex];
+    if (!match) return;
+    const frame = window.requestAnimationFrame(() => {
+      const mark = articleRef.current?.querySelector<HTMLElement>(
+        `[data-search-id="${match.id}"]`,
+      );
+      mark?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeReaderSearchIndex, reader, readerSearchMatches]);
 
   const renderedHtml = useMemo(() => {
     if (!reader) return "";
@@ -392,14 +425,55 @@ export default function App() {
       ? chapters[currentChapterIndex + 1]
       : null;
 
+  const activeGlobalSearchHighlight = useMemo<SearchHighlight | null>(() => {
+    if (!reader || activeSearchHighlight?.chapterVersionId !== reader.version.id) return null;
+    return {
+      id: "global-search",
+      startOffset: activeSearchHighlight.startOffset,
+      endOffset: activeSearchHighlight.endOffset,
+      matchedText: activeSearchHighlight.matchedText,
+      active: true,
+    };
+  }, [activeSearchHighlight, reader]);
+
+  const readerSearchHighlights = useMemo<SearchHighlight[]>(
+    () =>
+      readerSearchMatches.map((match, index) => ({
+        id: match.id,
+        startOffset: match.startOffset,
+        endOffset: match.endOffset,
+        matchedText: match.matchedText,
+        active: index === activeReaderSearchIndex,
+      })),
+    [activeReaderSearchIndex, readerSearchMatches],
+  );
+
+  const visibleSearchHighlights = useMemo(
+    () => [
+      ...(activeGlobalSearchHighlight ? [activeGlobalSearchHighlight] : []),
+      ...readerSearchHighlights,
+    ],
+    [activeGlobalSearchHighlight, readerSearchHighlights],
+  );
+
+  useEffect(() => {
+    if (!reader || !articleRef.current) {
+      setReaderSearchMatches([]);
+      setActiveReaderSearchIndex(-1);
+      return;
+    }
+    const nextMatches = buildReaderSearchMatches(
+      articleRef.current.textContent ?? "",
+      readerSearchQuery,
+    );
+    setReaderSearchMatches(nextMatches);
+    setActiveReaderSearchIndex(-1);
+  }, [reader?.version.id, readerSearchQuery, renderedHtml]);
+
   useEffect(() => {
     if (!reader || !articleRef.current) return;
-    applyDomHighlights(
-      articleRef.current,
-      reader.annotations,
-      activeSearchHighlight?.chapterVersionId === reader.version.id ? activeSearchHighlight : null,
-    );
-  }, [activeSearchHighlight, reader, renderedHtml]);
+    applyDomHighlights(articleRef.current, reader.annotations, visibleSearchHighlights);
+  }, [reader, renderedHtml, visibleSearchHighlights]);
 
   const activeAnnotation = useMemo(() => {
     if (!reader || !activeAnnotationId) return null;
@@ -428,6 +502,16 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        activeBook &&
+        (event.ctrlKey || event.metaKey) &&
+        !event.altKey &&
+        event.key.toLowerCase() === "f"
+      ) {
+        event.preventDefault();
+        focusReaderSearchInput();
+        return;
+      }
       if (shouldIgnoreShortcut(event)) return;
       const action = matchShortcut(event, shortcutBindings);
       if (!action) return;
@@ -450,8 +534,9 @@ export default function App() {
         "--reader-left-width": `${leftPaneWidth}px`,
         "--reader-right-width": `${rightPaneWidth}px`,
         "--chapter-list-height": `${chapterPaneHeight}px`,
+        "--reader-search-height": `${readerSearchPaneHeight}px`,
       }) as CSSProperties,
-    [chapterPaneHeight, leftPaneWidth, rightPaneWidth, settings],
+    [chapterPaneHeight, leftPaneWidth, readerSearchPaneHeight, rightPaneWidth, settings],
   );
 
   async function boot() {
@@ -1004,6 +1089,35 @@ export default function App() {
     window.addEventListener("pointercancel", stopResize);
   }
 
+  function startReaderSearchResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0 || !readerRightRef.current) return;
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = readerSearchPaneHeight;
+    const rightRect = readerRightRef.current.getBoundingClientRect();
+    const maxHeight = Math.max(180, rightRect.height - 42 - 150 - 8);
+
+    setResizeTarget("readerSearch");
+    document.body.classList.add("pane-resize-active", "pane-resize-row");
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const nextHeight = clamp(startHeight - (moveEvent.clientY - startY), 156, maxHeight);
+      setReaderSearchPaneHeight(nextHeight);
+    };
+
+    const stopResize = () => {
+      setResizeTarget(null);
+      document.body.classList.remove("pane-resize-active", "pane-resize-row");
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopResize);
+      window.removeEventListener("pointercancel", stopResize);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
+  }
+
   async function saveExportPreset(
     presetId: string | null,
     payload: ExportPresetPayload,
@@ -1220,6 +1334,64 @@ export default function App() {
     }
   }
 
+  function openSearchModal() {
+    setSearchQuery("");
+    setSearchOpen(true);
+  }
+
+  function closeSearchModal() {
+    setSearchOpen(false);
+    setSearchQuery("");
+  }
+
+  function focusReaderSearchInput() {
+    setIsRightCollapsed(false);
+    window.setTimeout(() => {
+      readerSearchInputRef.current?.focus();
+      readerSearchInputRef.current?.select();
+    }, 0);
+  }
+
+  function updateReaderSearchQuery(query: string) {
+    setReaderSearchQuery(query);
+    setActiveReaderSearchIndex(-1);
+    setActiveSearchHighlight(null);
+  }
+
+  function selectReaderSearchMatch(index: number) {
+    if (!readerSearchMatches[index]) return;
+    setActiveSearchHighlight(null);
+    setActiveReaderSearchIndex(index);
+  }
+
+  function handleReaderSearchKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      updateReaderSearchQuery("");
+      return;
+    }
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+      selectReaderSearchMatch(activeReaderSearchIndex >= 0 ? activeReaderSearchIndex : 0);
+      return;
+    }
+
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      if (!readerSearchMatches.length) return;
+      event.preventDefault();
+      const direction = event.key === "ArrowDown" ? 1 : -1;
+      const nextIndex =
+        activeReaderSearchIndex < 0
+          ? direction > 0
+            ? 0
+            : readerSearchMatches.length - 1
+          : (activeReaderSearchIndex + direction + readerSearchMatches.length) %
+            readerSearchMatches.length;
+      selectReaderSearchMatch(nextIndex);
+    }
+  }
+
   function selectAdjacentChapter(direction: 1 | -1) {
     if (!reader) return;
     const index = chapters.findIndex((chapter) => chapter.id === reader.chapter.id);
@@ -1229,7 +1401,7 @@ export default function App() {
 
   function runShortcutAction(action: ShortcutAction) {
     if (action === "search") {
-      setSearchOpen(true);
+      openSearchModal();
       return;
     }
     if (action === "nextChapter") {
@@ -1441,16 +1613,19 @@ export default function App() {
             books={books}
             notes={notes}
             onQueryChange={setSearchQuery}
-            onClose={() => setSearchOpen(false)}
+            onClose={closeSearchModal}
             onOpenBook={(book) => {
-              setSearchOpen(false);
+              closeSearchModal();
               void openBook(book);
             }}
             onOpenNote={(note) => {
-              setSearchOpen(false);
+              closeSearchModal();
               void openNote(note);
             }}
-            onOpenContentResult={(result) => void openContentSearchResult(result)}
+            onOpenContentResult={(result) => {
+              closeSearchModal();
+              void openContentSearchResult(result);
+            }}
           />
         )}
         {batchExportOpen && (
@@ -1649,29 +1824,75 @@ export default function App() {
         onPointerDown={(event) => startReaderColumnResize("right", event)}
       />
 
-      <aside className="reader-right">
-        <div className="pane-header">
-          <span>批注</span>
-          <small>{reader?.annotations.length ?? 0}</small>
-        </div>
+      <aside className="reader-right" ref={readerRightRef}>
+        <section className="reader-annotations-panel">
+          <div className="pane-header">
+            <span>批注</span>
+            <small>{reader?.annotations.length ?? 0}</small>
+          </div>
 
-        <div className="annotation-list">
-          {reader?.annotations.length ? (
-            reader.annotations.map((annotation) => (
-              <AnnotationCard
-                key={annotation.id}
-                annotation={annotation}
-                active={annotation.id === activeAnnotationId}
-                onOpen={() => setActiveAnnotationId(annotation.id)}
-              />
-            ))
-          ) : (
-            <div className="empty-panel">
-              <MessageSquare size={28} />
-              <p>选中正文后可以创建高亮和评论。</p>
-            </div>
-          )}
-        </div>
+          <div className="annotation-list">
+            {reader?.annotations.length ? (
+              reader.annotations.map((annotation) => (
+                <AnnotationCard
+                  key={annotation.id}
+                  annotation={annotation}
+                  active={annotation.id === activeAnnotationId}
+                  onOpen={() => setActiveAnnotationId(annotation.id)}
+                />
+              ))
+            ) : (
+              <div className="empty-panel">
+                <MessageSquare size={28} />
+                <p>选中正文后可以创建高亮和评论。</p>
+              </div>
+            )}
+          </div>
+        </section>
+
+        <div
+          className="reader-section-resizer reader-search-resizer"
+          role="separator"
+          aria-label="调整批注和搜索面板高度"
+          onPointerDown={startReaderSearchResize}
+        />
+
+        <section className="reader-search-panel">
+          <div className="pane-header reader-search-heading">
+            <span>正文搜索</span>
+            <small>{readerSearchQuery.trim() ? `${readerSearchMatches.length} 处` : "Ctrl+F"}</small>
+          </div>
+          <label className="reader-search-box">
+            <Search size={15} />
+            <input
+              ref={readerSearchInputRef}
+              value={readerSearchQuery}
+              onChange={(event) => updateReaderSearchQuery(event.target.value)}
+              onKeyDown={handleReaderSearchKeyDown}
+              placeholder="搜索当前章节"
+            />
+          </label>
+          <div className="reader-search-results">
+            {!readerSearchQuery.trim() ? (
+              <p className="reader-search-empty">输入关键词后会在正文中标出所有命中。</p>
+            ) : readerSearchMatches.length ? (
+              readerSearchMatches.map((match, index) => (
+                <button
+                  key={match.id}
+                  className={`reader-search-result ${
+                    index === activeReaderSearchIndex ? "active" : ""
+                  }`}
+                  onClick={() => selectReaderSearchMatch(index)}
+                >
+                  <span>{index + 1}</span>
+                  <em>{match.excerpt}</em>
+                </button>
+              ))
+            ) : (
+              <p className="reader-search-empty">没有找到匹配内容。</p>
+            )}
+          </div>
+        </section>
       </aside>
 
       {sortOpen && (
@@ -1721,16 +1942,19 @@ export default function App() {
           books={books}
           notes={notes}
           onQueryChange={setSearchQuery}
-          onClose={() => setSearchOpen(false)}
+          onClose={closeSearchModal}
           onOpenBook={(book) => {
-            setSearchOpen(false);
+            closeSearchModal();
             void openBook(book);
           }}
           onOpenNote={(note) => {
-            setSearchOpen(false);
+            closeSearchModal();
             void openNote(note);
           }}
-          onOpenContentResult={(result) => void openContentSearchResult(result)}
+          onOpenContentResult={(result) => {
+            closeSearchModal();
+            void openContentSearchResult(result);
+          }}
         />
       )}
       {contextMenu && pendingDraft && (
@@ -1795,4 +2019,44 @@ function getReadingStats(content: string) {
     wordCount,
     minutes: wordCount === 0 ? 0 : Math.max(1, Math.ceil(wordCount / 500)),
   };
+}
+
+function buildReaderSearchMatches(rootText: string, query: string) {
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+
+  const haystack = rootText.toLowerCase();
+  const needle = trimmed.toLowerCase();
+  const matches: ReaderSearchMatch[] = [];
+  let cursor = 0;
+
+  while (cursor <= haystack.length && matches.length < 200) {
+    const index = haystack.indexOf(needle, cursor);
+    if (index < 0) break;
+    const endOffset = index + needle.length;
+    const matchedText = rootText.slice(index, endOffset);
+    matches.push({
+      id: `reader-search-${matches.length}-${index}`,
+      startOffset: index,
+      endOffset,
+      matchedText,
+      excerpt: buildReaderSearchExcerpt(rootText, index, endOffset),
+    });
+    cursor = Math.max(endOffset, index + 1);
+  }
+
+  return matches;
+}
+
+function buildReaderSearchExcerpt(rootText: string, startOffset: number, endOffset: number) {
+  const before = rootText.slice(Math.max(0, startOffset - 54), startOffset);
+  const match = rootText.slice(startOffset, endOffset);
+  const after = rootText.slice(endOffset, Math.min(rootText.length, endOffset + 86));
+  const prefix = startOffset > 54 ? "..." : "";
+  const suffix = endOffset + 86 < rootText.length ? "..." : "";
+  return collapseReaderSearchWhitespace(`${prefix}${before}${match}${after}${suffix}`);
+}
+
+function collapseReaderSearchWhitespace(value: string) {
+  return value.replace(/\s+/g, " ").trim();
 }

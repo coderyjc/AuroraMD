@@ -8,10 +8,10 @@ Loop Book 是一个本地优先的 Markdown 桌面阅读器，用来阅读按章
 
 如果重开 Codex 会话，请先读本节和下面的“开发踩坑记录”。当前项目状态以本 README 为准。
 
-- 当前版本：`v0.3.0`。
+- 当前版本：`v0.4.0`。
 - 当前工作区：`E:\code\github\annotaloop`。
 - 用户验证入口：`src-tauri/target/release/loop-book.exe`。完成功能或修复后，默认直接执行 `npm.cmd run tauri -- build`，不要只停在前端构建或 dev server。
-- 最近一次 release 构建已在 2026-07-14 12:52 左右通过，输出了 `src-tauri/target/release/loop-book.exe` 和 `src-tauri/target/release/bundle/nsis/Loop Book_0.3.0_x64-setup.exe`。
+- 最近一次 release 构建输出为 `src-tauri/target/release/loop-book.exe` 和 `src-tauri/target/release/bundle/nsis/Loop Book_0.4.0_x64-setup.exe`。
 - 目前窗口已改为 Tauri 无原生装饰窗口：`src-tauri/tauri.conf.json` 中 `decorations` 为 `false`，应用内标题栏在 `src/App.tsx` 的 `AppTitlebar` 和 `src/styles.css` 的 `.desktop-titlebar`。
 - 首页 gallery 书籍置顶不是图钉方案，而是左侧渐变色条；对应样式是 `.book-entry::before` 和 `.book-entry.is-pinned::before`。
 - 阅读器正文上方显示“本文共 xx 字 / 阅读需要 xx 分钟”，正文底部有“上一篇 / 下一篇”导航。
@@ -143,7 +143,7 @@ npm.cmd run tauri -- build
 
 ```text
 src-tauri/target/release/loop-book.exe
-src-tauri/target/release/bundle/nsis/Loop Book_0.3.0_x64-setup.exe
+src-tauri/target/release/bundle/nsis/Loop Book_0.4.0_x64-setup.exe
 ```
 
 ## 数据存储
@@ -226,23 +226,22 @@ npm.cmd run tauri -- build
 src-tauri/target/release/loop-book.exe
 ```
 
-- 如果 Tauri 打包失败并提示无法删除 `src-tauri/target/release/loop-book.exe` 或 `Access is denied`，通常是旧的 Loop Book 程序还开着。先关闭正在运行的 `loop-book.exe`，必要时结束 `loop-book` 进程后再重新构建。
+- 如果 Tauri 打包失败并提示无法删除 `src-tauri/target/release/loop-book.exe` 或 `Access is denied`，通常是旧的 Loop Book 测试程序还开着。后续遇到这类情况，默认直接结束当前 `loop-book` 测试进程（必要时强制 `Stop-Process -Force`），然后重新执行 `npm.cmd run tauri -- build`，不要改用独立 target 目录规避默认构建。
 - 常规验证顺序建议：
   1. `npm.cmd run build`
   2. `cargo check`（在 `src-tauri/` 下）
   3. `cargo test`（在 `src-tauri/` 下）
   4. `npm.cmd run tauri -- build`
-- 当前 v0.3.0 功能更新后已通过：
+- 当前 v0.4.0 阅读器搜索更新后已通过：
   - `npm.cmd run build`
-  - `cargo check`
-  - `cargo test`
+  - `npm.cmd run tauri -- build`
 - 最近一次自定义标题栏更新后已通过：
   - `npm.cmd run build`
   - `npm.cmd run tauri -- build`
 - Windows 安装包输出位置通常是：
 
 ```text
-src-tauri/target/release/bundle/nsis/Loop Book_0.3.0_x64-setup.exe
+src-tauri/target/release/bundle/nsis/Loop Book_0.4.0_x64-setup.exe
 ```
 - 如果 `cargo check` 或 Tauri 打包时报错，提示去读取另一个旧目录下的 `target/.../permissions/...app_hide.toml`，通常是 Tauri/Rust 构建缓存里残留了旧绝对路径。排查时可以临时使用独立 target 目录：
 

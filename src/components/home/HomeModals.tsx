@@ -1,5 +1,5 @@
 import { AlertTriangle, Archive, ArrowRight, BookOpen, Check, Copy, Database, Download, FileText, FolderOpen, Keyboard, MessageSquare, Palette, Pencil, Pin, PinOff, Plus, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
-import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useState } from "react";
+import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   deleteChapterVersion,
   listChapterVersions,
@@ -38,6 +38,11 @@ interface ContextMenuState {
 
 export type BookMenuState = ContextMenuState & { book: BookSummary };
 export type RenameBookState = { book: BookSummary; name: string };
+
+type BookSearchResultItem = { id: string; kind: "book"; book: BookSummary };
+type NoteSearchResultItem = { id: string; kind: "note"; note: NoteItem };
+type ContentSearchResultItem = { id: string; kind: "content"; result: ContentSearchResult };
+type SearchResultItem = BookSearchResultItem | NoteSearchResultItem | ContentSearchResultItem;
 
 interface VersionDiffResult {
   base: ReadChapterResponse;
@@ -630,15 +635,58 @@ export function SearchModal({
   const [contentResults, setContentResults] = useState<ContentSearchResult[]>([]);
   const [contentSearchBusy, setContentSearchBusy] = useState(false);
   const [contentSearchError, setContentSearchError] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
+  const resultRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const normalized = query.trim().toLowerCase();
-  const matchedBooks = normalized
-    ? books.filter((book) => `${book.name} ${book.rootPath}`.toLowerCase().includes(normalized))
-    : books.slice(0, 5);
-  const matchedNotes = normalized
-    ? notes.filter((note) =>
-        `${note.bookName} ${note.chapterTitle} ${note.selectedText} ${note.comment}`.toLowerCase().includes(normalized),
-      )
-    : notes.slice(0, 8);
+  const matchedBooks = useMemo(
+    () =>
+      normalized
+        ? books
+            .filter((book) => `${book.name} ${book.rootPath}`.toLowerCase().includes(normalized))
+            .slice(0, 12)
+        : books.slice(0, 5),
+    [books, normalized],
+  );
+  const matchedNotes = useMemo(
+    () =>
+      normalized
+        ? notes
+            .filter((note) =>
+              `${note.bookName} ${note.chapterTitle} ${note.selectedText} ${note.comment}`
+                .toLowerCase()
+                .includes(normalized),
+            )
+            .slice(0, 12)
+        : [],
+    [notes, normalized],
+  );
+  const bookItems = useMemo<BookSearchResultItem[]>(
+    () => matchedBooks.map((book) => ({ id: `book:${book.id}`, kind: "book", book })),
+    [matchedBooks],
+  );
+  const noteItems = useMemo<NoteSearchResultItem[]>(
+    () => matchedNotes.map((note) => ({ id: `note:${note.id}`, kind: "note", note })),
+    [matchedNotes],
+  );
+  const contentItems = useMemo<ContentSearchResultItem[]>(
+    () =>
+      normalized.length >= 2
+        ? contentResults.map((result, index) => ({
+            id: `content:${result.chapterVersionId}:${result.startOffset}:${index}`,
+            kind: "content",
+            result,
+          }))
+        : [],
+    [contentResults, normalized.length],
+  );
+  const resultItems = useMemo(
+    () => [...bookItems, ...noteItems, ...contentItems],
+    [bookItems, noteItems, contentItems],
+  );
+  const resultIndexById = useMemo(
+    () => new Map(resultItems.map((item, index) => [item.id, index])),
+    [resultItems],
+  );
 
   useEffect(() => {
     const searchText = query.trim();
@@ -671,46 +719,130 @@ export function SearchModal({
     };
   }, [query]);
 
+  useEffect(() => {
+    setActiveIndex(resultItems.length ? 0 : -1);
+  }, [query]);
+
+  useEffect(() => {
+    setActiveIndex((current) => {
+      if (!resultItems.length) return -1;
+      if (current < 0) return 0;
+      return Math.min(current, resultItems.length - 1);
+    });
+    resultRefs.current = resultRefs.current.slice(0, resultItems.length);
+  }, [resultItems.length]);
+
+  useEffect(() => {
+    if (activeIndex < 0) return;
+    resultRefs.current[activeIndex]?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex]);
+
+  function openSearchResult(item: SearchResultItem) {
+    if (item.kind === "book") {
+      onOpenBook(item.book);
+      return;
+    }
+    if (item.kind === "note") {
+      onOpenNote(item.note);
+      return;
+    }
+    onOpenContentResult(item.result);
+  }
+
+  function handleSearchKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (!resultItems.length) return;
+      const direction = event.key === "ArrowDown" ? 1 : -1;
+      setActiveIndex((current) => {
+        const start = current < 0 ? (direction > 0 ? -1 : 0) : current;
+        return (start + direction + resultItems.length) % resultItems.length;
+      });
+      return;
+    }
+
+    if (event.key === "Enter" && !(event.nativeEvent as KeyboardEvent).isComposing) {
+      const item = resultItems[activeIndex >= 0 ? activeIndex : 0];
+      if (!item) return;
+      event.preventDefault();
+      openSearchResult(item);
+    }
+  }
+
+  function resultButtonProps(item: SearchResultItem, className = "") {
+    const index = resultIndexById.get(item.id) ?? -1;
+    const isActive = index === activeIndex;
+    return {
+      ref: (node: HTMLButtonElement | null) => {
+        if (index >= 0) resultRefs.current[index] = node;
+      },
+      className: [className, isActive ? "is-active" : ""].filter(Boolean).join(" "),
+      "aria-selected": isActive,
+      onMouseEnter: () => setActiveIndex(index),
+      onClick: () => openSearchResult(item),
+    };
+  }
+
   return (
     <div className="modal-backdrop search-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="search-modal" onMouseDown={(event) => event.stopPropagation()}>
         <div className="search-box">
           <Search size={18} />
-          <input value={query} onChange={(event) => onQueryChange(event.target.value)} autoFocus placeholder="搜索书籍、批注、正文" />
+          <input
+            value={query}
+            onChange={(event) => onQueryChange(event.target.value)}
+            onKeyDown={handleSearchKeyDown}
+            autoFocus
+            placeholder="搜索书籍、批注、正文"
+          />
           <button className="icon-button small" onClick={onClose}>
             <X size={14} />
           </button>
         </div>
         <div className="search-results">
-          <h3>书籍</h3>
-          {matchedBooks.map((book) => (
-            <button key={book.id} onClick={() => onOpenBook(book)}>
-              <BookOpen size={15} /> <span>{book.name}</span>
-            </button>
-          ))}
-          <h3>批注</h3>
-          {matchedNotes.map((note) => (
-            <button key={note.id} onClick={() => onOpenNote(note)}>
-              <MessageSquare size={15} /> <span>{note.comment.trim() || note.selectedText}</span>
-            </button>
-          ))}
-          <h3>正文 {contentSearchBusy ? "搜索中" : contentResults.length ? contentResults.length : ""}</h3>
-          {contentSearchError && <p className="search-error">{contentSearchError}</p>}
-          {!contentSearchError &&
-            contentResults.map((result, index) => (
-              <button
-                key={`${result.chapterVersionId}-${result.startOffset}-${index}`}
-                className="content-search-result"
-                onClick={() => onOpenContentResult(result)}
-              >
-                <FileText size={15} />
-                <span>
-                  <strong>{result.chapterTitle}</strong>
-                  <small>{result.bookName}</small>
-                  <em>{result.excerpt}</em>
-                </span>
-              </button>
-            ))}
+          {bookItems.length > 0 && (
+            <>
+              <h3>书籍</h3>
+              {bookItems.map((item) => (
+                <button key={item.id} {...resultButtonProps(item)}>
+                  <BookOpen size={15} /> <span>{item.book.name}</span>
+                </button>
+              ))}
+            </>
+          )}
+          {noteItems.length > 0 && (
+            <>
+              <h3>批注</h3>
+              {noteItems.map((item) => (
+                <button key={item.id} {...resultButtonProps(item)}>
+                  <MessageSquare size={15} /> <span>{item.note.comment.trim() || item.note.selectedText}</span>
+                </button>
+              ))}
+            </>
+          )}
+          {(contentSearchBusy || contentSearchError || contentItems.length > 0) && (
+            <>
+              <h3>正文 {contentSearchBusy ? "搜索中" : contentItems.length ? contentItems.length : ""}</h3>
+              {contentSearchError && <p className="search-error">{contentSearchError}</p>}
+              {!contentSearchError &&
+                contentItems.map((item) => (
+                  <button key={item.id} {...resultButtonProps(item, "content-search-result")}>
+                    <FileText size={15} />
+                    <span>
+                      <strong>{item.result.chapterTitle}</strong>
+                      <small>{item.result.bookName}</small>
+                      <em>{item.result.excerpt}</em>
+                    </span>
+                  </button>
+                ))}
+            </>
+          )}
         </div>
       </section>
     </div>
