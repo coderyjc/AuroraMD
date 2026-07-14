@@ -1,4 +1,4 @@
-import { AlertTriangle, Archive, ArrowRight, BookOpen, Check, Copy, Database, Download, FileText, FolderOpen, Keyboard, MessageSquare, Palette, Pencil, Plus, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
+import { AlertTriangle, Archive, ArrowRight, BookOpen, Check, Copy, Database, Download, FileText, FolderOpen, Keyboard, MessageSquare, Palette, Pencil, Pin, PinOff, Plus, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useState } from "react";
 import {
   deleteChapterVersion,
@@ -130,6 +130,7 @@ const themeOptions = [
 
 export function BookContextMenu({
   menu,
+  onTogglePinned,
   onRename,
   onOpenFolder,
   onSync,
@@ -137,6 +138,7 @@ export function BookContextMenu({
   onDelete,
 }: {
   menu: BookMenuState;
+  onTogglePinned: () => void;
   onRename: () => void;
   onOpenFolder: () => void;
   onSync: () => void;
@@ -145,6 +147,10 @@ export function BookContextMenu({
 }) {
   return (
     <div className="context-menu" style={{ left: menu.x, top: menu.y }} onClick={(event) => event.stopPropagation()}>
+      <button onClick={onTogglePinned}>
+        {menu.book.isPinned ? <PinOff size={15} /> : <Pin size={15} />}
+        {menu.book.isPinned ? "取消置顶" : "置顶"}
+      </button>
       <button onClick={onRename}>
         <Pencil size={15} /> 重命名书籍
       </button>

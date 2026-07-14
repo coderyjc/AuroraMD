@@ -44,6 +44,7 @@ pub fn run() {
             list_books,
             get_book,
             update_book_name,
+            update_book_pinned,
             delete_book,
             open_book_folder,
             sync_book_folder,
@@ -332,6 +333,7 @@ fn list_books(state: State<AppState>) -> AppResult<Vec<BookSummary>> {
                 b.name,
                 b.root_path,
                 b.view_mode,
+                b.is_pinned,
                 b.created_at,
                 b.updated_at,
                 COUNT(DISTINCT c.id) AS chapter_count,
@@ -340,7 +342,7 @@ fn list_books(state: State<AppState>) -> AppResult<Vec<BookSummary>> {
             LEFT JOIN chapters c ON c.book_id = b.id
             LEFT JOIN annotations a ON a.book_id = b.id
             GROUP BY b.id
-            ORDER BY b.updated_at DESC
+            ORDER BY b.is_pinned DESC, b.updated_at DESC, b.created_at DESC
             "#,
         )
         .map_err(db_error)?;
@@ -352,10 +354,11 @@ fn list_books(state: State<AppState>) -> AppResult<Vec<BookSummary>> {
                 name: row.get(1)?,
                 root_path: row.get(2)?,
                 view_mode: row.get(3)?,
-                created_at: row.get(4)?,
-                updated_at: row.get(5)?,
-                chapter_count: row.get(6)?,
-                annotation_count: row.get(7)?,
+                is_pinned: row.get::<_, i64>(4)? != 0,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+                chapter_count: row.get(7)?,
+                annotation_count: row.get(8)?,
             })
         })
         .map_err(db_error)?;
@@ -383,6 +386,26 @@ fn update_book_name(book_id: String, name: String, state: State<AppState>) -> Ap
     )
     .map_err(|error| format!("Failed to rename book: {error}"))?;
     get_book_by_id(&conn, &book_id)
+}
+
+#[tauri::command]
+fn update_book_pinned(
+    book_id: String,
+    is_pinned: bool,
+    state: State<AppState>,
+) -> AppResult<Book> {
+    let conn = lock_conn(&state)?;
+    let changed = conn
+        .execute(
+            "UPDATE books SET is_pinned = ?1 WHERE id = ?2",
+            params![if is_pinned { 1 } else { 0 }, book_id],
+        )
+        .map_err(|error| format!("Failed to update pinned state: {error}"))?;
+    if changed == 0 {
+        Err("Book was not found.".to_string())
+    } else {
+        get_book_by_id(&conn, &book_id)
+    }
 }
 
 #[tauri::command]
@@ -1046,6 +1069,27 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
     } else {
         Ok(())
     };
+    let pinned_restore_result = if restore_result.is_ok()
+        && backup_has_column(&conn, "books", "is_pinned")?
+    {
+        conn.execute_batch(
+            r#"
+            UPDATE books
+            SET is_pinned = (
+                SELECT is_pinned
+                FROM backup.books
+                WHERE backup.books.id = books.id
+            )
+            WHERE EXISTS (
+                SELECT 1
+                FROM backup.books
+                WHERE backup.books.id = books.id
+            );
+            "#,
+        )
+    } else {
+        Ok(())
+    };
     let preset_restore_result = if restore_result.is_ok() && backup_has_table(&conn, "export_presets")? {
         conn.execute_batch(
             r#"
@@ -1066,6 +1110,8 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
         .map_err(|error| format!("Failed to restore annotation anchors: {error}"))?;
     focus_mode_restore_result
         .map_err(|error| format!("Failed to restore focus mode setting: {error}"))?;
+    pinned_restore_result
+        .map_err(|error| format!("Failed to restore pinned books: {error}"))?;
     preset_restore_result.map_err(|error| format!("Failed to restore export presets: {error}"))?;
     detach_result.map_err(|error| format!("Failed to close backup database: {error}"))?;
 
@@ -1512,7 +1558,7 @@ fn read_chapter_payload(
 
 fn get_book_by_root_path(conn: &Connection, root_path: &str) -> AppResult<Option<Book>> {
     conn.query_row(
-        "SELECT id, name, root_path, view_mode, created_at, updated_at FROM books WHERE root_path = ?1",
+        "SELECT id, name, root_path, view_mode, is_pinned, created_at, updated_at FROM books WHERE root_path = ?1",
         params![root_path],
         map_book,
     )
@@ -1522,7 +1568,7 @@ fn get_book_by_root_path(conn: &Connection, root_path: &str) -> AppResult<Option
 
 fn get_book_by_id(conn: &Connection, book_id: &str) -> AppResult<Book> {
     conn.query_row(
-        "SELECT id, name, root_path, view_mode, created_at, updated_at FROM books WHERE id = ?1",
+        "SELECT id, name, root_path, view_mode, is_pinned, created_at, updated_at FROM books WHERE id = ?1",
         params![book_id],
         map_book,
     )
@@ -1881,8 +1927,9 @@ fn map_book(row: &rusqlite::Row<'_>) -> rusqlite::Result<Book> {
         name: row.get(1)?,
         root_path: row.get(2)?,
         view_mode: row.get(3)?,
-        created_at: row.get(4)?,
-        updated_at: row.get(5)?,
+        is_pinned: row.get::<_, i64>(4)? != 0,
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
     })
 }
 

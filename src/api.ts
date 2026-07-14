@@ -41,6 +41,10 @@ export async function updateBookName(bookId: string, name: string) {
   return invoke<Book>("update_book_name", { bookId, name });
 }
 
+export async function updateBookPinned(bookId: string, isPinned: boolean) {
+  return invoke<Book>("update_book_pinned", { bookId, isPinned });
+}
+
 export async function deleteBook(bookId: string) {
   return invoke<void>("delete_book", { bookId });
 }

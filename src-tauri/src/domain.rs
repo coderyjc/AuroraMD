@@ -9,6 +9,7 @@ pub struct Book {
     pub name: String,
     pub root_path: String,
     pub view_mode: String,
+    pub is_pinned: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -20,6 +21,7 @@ pub struct BookSummary {
     pub name: String,
     pub root_path: String,
     pub view_mode: String,
+    pub is_pinned: bool,
     pub created_at: String,
     pub updated_at: String,
     pub chapter_count: i64,

@@ -1,16 +1,30 @@
 import {
   ArrowLeft,
   BookOpen,
+  ChevronLeft,
+  ChevronRight,
   Download,
   FileText,
   FolderPlus,
   Grid3X3,
   Highlighter,
   MessageSquare,
+  Minus,
   Settings,
+  Square,
+  X,
 } from "lucide-react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { type CSSProperties, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   createAnnotation,
   createExportPreset,
@@ -36,6 +50,7 @@ import {
   saveReadingProgress,
   syncBookFolder,
   updateBookName,
+  updateBookPinned,
   updateAnnotation,
   updateExportPreset,
   updateSettings,
@@ -102,6 +117,60 @@ interface ContextMenuState {
 }
 
 type ReaderBook = Book | BookSummary;
+
+function AppTitlebar({ title, subtitle }: { title: string; subtitle: string }) {
+  function handleDrag(event: ReactMouseEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    if ((event.target as HTMLElement).closest("button")) return;
+    const appWindow = getCurrentWindow();
+    if (event.detail >= 2) {
+      void appWindow.toggleMaximize();
+      return;
+    }
+    void appWindow.startDragging();
+  }
+
+  return (
+    <div className="desktop-titlebar" onMouseDown={handleDrag}>
+      <div className="titlebar-brand" data-tauri-drag-region>
+        <span className="titlebar-mark" aria-hidden="true" />
+        <div className="titlebar-copy">
+          <strong>{title}</strong>
+          <span>{subtitle}</span>
+        </div>
+      </div>
+      <div className="window-controls">
+        <button
+          type="button"
+          className="window-control"
+          title="最小化"
+          aria-label="最小化"
+          onClick={() => void getCurrentWindow().minimize()}
+        >
+          <Minus size={15} />
+        </button>
+        <button
+          type="button"
+          className="window-control"
+          title="最大化或还原"
+          aria-label="最大化或还原"
+          onClick={() => void getCurrentWindow().toggleMaximize()}
+        >
+          <Square size={13} />
+        </button>
+        <button
+          type="button"
+          className="window-control close"
+          title="关闭"
+          aria-label="关闭"
+          onClick={() => void getCurrentWindow().close()}
+        >
+          <X size={16} />
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export default function App() {
   const [books, setBooks] = useState<BookSummary[]>([]);
@@ -310,6 +379,19 @@ export default function App() {
     return renderMarkdownWithAnnotations(reader.content, reader.chapter.filePath);
   }, [reader]);
 
+  const readerStats = useMemo(() => getReadingStats(reader?.content ?? ""), [reader?.content]);
+
+  const currentChapterIndex = useMemo(() => {
+    if (!reader) return -1;
+    return chapters.findIndex((chapter) => chapter.id === reader.chapter.id);
+  }, [chapters, reader]);
+
+  const previousChapter = currentChapterIndex > 0 ? chapters[currentChapterIndex - 1] : null;
+  const nextChapter =
+    currentChapterIndex >= 0 && currentChapterIndex < chapters.length - 1
+      ? chapters[currentChapterIndex + 1]
+      : null;
+
   useEffect(() => {
     if (!reader || !articleRef.current) return;
     applyDomHighlights(
@@ -512,6 +594,7 @@ export default function App() {
           name: note.bookName,
           rootPath: "",
           viewMode: "grid",
+          isPinned: false,
           createdAt: note.createdAt,
           updatedAt: note.updatedAt,
           chapterCount: nextChapters.length,
@@ -550,6 +633,7 @@ export default function App() {
           name: result.bookName,
           rootPath: "",
           viewMode: "grid",
+          isPinned: false,
           createdAt: "",
           updatedAt: "",
           chapterCount: nextChapters.length,
@@ -994,6 +1078,22 @@ export default function App() {
     }
   }
 
+  async function toggleBookPinned(book: BookSummary) {
+    const nextPinned = !book.isPinned;
+    setBusy(true);
+    setError("");
+    setBookMenu(null);
+    try {
+      await updateBookPinned(book.id, nextPinned);
+      await refreshBooks();
+      setNotice(nextPinned ? `已置顶《${book.name}》。` : `已取消置顶《${book.name}》。`);
+    } catch (err) {
+      setError(readError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function confirmDeleteBook() {
     if (!deleteBookDraft) return;
     const deletedBook = deleteBookDraft;
@@ -1167,6 +1267,7 @@ export default function App() {
         className={`app-shell home-shell theme-${settings.theme} surface-${settings.surface}`}
         onContextMenu={suppressNativeContextMenu}
       >
+        <AppTitlebar title="Loop Book" subtitle="首页" />
         <TopNotice error={error} notice={notice} onClose={() => {
           setError("");
           setNotice("");
@@ -1239,11 +1340,10 @@ export default function App() {
             {books.map((book) => (
               <button
                 key={book.id}
-                className="book-card"
+                className={`book-card book-entry ${book.isPinned ? "is-pinned" : ""}`}
                 onClick={() => void openBook(book)}
                 onContextMenu={(event) => handleBookContextMenu(event, book)}
               >
-                <span className="book-mark" />
                 <strong>{book.name}</strong>
                 <span>{book.chapterCount} 章 · {book.annotationCount} 条批注</span>
                 <small>{book.rootPath}</small>
@@ -1269,6 +1369,7 @@ export default function App() {
         {bookMenu && (
           <BookContextMenu
             menu={bookMenu}
+            onTogglePinned={() => void toggleBookPinned(bookMenu.book)}
             onRename={() => {
               setRenameBookDraft({ book: bookMenu.book, name: bookMenu.book.name });
               setBookMenu(null);
@@ -1374,6 +1475,7 @@ export default function App() {
       style={readerStyle}
       onContextMenu={suppressNativeContextMenu}
     >
+      <AppTitlebar title={activeBook.name} subtitle={reader?.chapter.title ?? "阅读器"} />
       <TopNotice error={error} notice={notice} onClose={() => {
         setError("");
         setNotice("");
@@ -1500,6 +1602,12 @@ export default function App() {
         </header>
 
         <div className={`reading-surface border-${settings.borderStyle}`} ref={scrollRef}>
+          {reader && (
+            <div className="reading-stats" aria-live="polite">
+              <span>本文共 {readerStats.wordCount.toLocaleString()} 字</span>
+              <span>阅读需要 {readerStats.minutes} 分钟</span>
+            </div>
+          )}
           <article
             ref={articleRef}
             className={`markdown-body ${settings.focusMode ? "focus-mode" : ""}`}
@@ -1508,6 +1616,29 @@ export default function App() {
             onClick={handleAnnotationClick}
             dangerouslySetInnerHTML={{ __html: renderedHtml }}
           />
+          {reader && (
+            <nav className="chapter-bottom-nav" aria-label="章节导航">
+              <button
+                type="button"
+                onClick={() => previousChapter && void selectChapter(previousChapter.id)}
+                disabled={!previousChapter || busy}
+              >
+                <ChevronLeft size={17} />
+                <span>上一篇</span>
+              </button>
+              <span className="chapter-bottom-index">
+                {currentChapterIndex >= 0 ? currentChapterIndex + 1 : 0} / {chapters.length}
+              </span>
+              <button
+                type="button"
+                onClick={() => nextChapter && void selectChapter(nextChapter.id)}
+                disabled={!nextChapter || busy}
+              >
+                <span>下一篇</span>
+                <ChevronRight size={17} />
+              </button>
+            </nav>
+          )}
         </div>
       </main>
 
@@ -1645,4 +1776,23 @@ function readError(err: unknown) {
 function clamp(value: number, min: number, max: number) {
   const upper = Math.max(min, max);
   return Math.min(Math.max(value, min), upper);
+}
+
+function getReadingStats(content: string) {
+  const plainText = content
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`[^`]*`/g, " ")
+    .replace(/!\[[^\]]*]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]*)]\([^)]*\)/g, "$1")
+    .replace(/[#>*_~\-|[\]()`]/g, " ");
+  const cjkCount = plainText.match(/[\u3400-\u9fff\uf900-\ufaff]/g)?.length ?? 0;
+  const latinWordCount =
+    plainText
+      .replace(/[\u3400-\u9fff\uf900-\ufaff]/g, " ")
+      .match(/[A-Za-z0-9]+(?:['-][A-Za-z0-9]+)*/g)?.length ?? 0;
+  const wordCount = cjkCount + latinWordCount;
+  return {
+    wordCount,
+    minutes: wordCount === 0 ? 0 : Math.max(1, Math.ceil(wordCount / 500)),
+  };
 }

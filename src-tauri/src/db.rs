@@ -11,6 +11,7 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
             name TEXT NOT NULL,
             root_path TEXT NOT NULL UNIQUE,
             view_mode TEXT NOT NULL DEFAULT 'grid',
+            is_pinned INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -104,6 +105,12 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
         "#,
     )?;
 
+    ensure_column(
+        &conn,
+        "books",
+        "is_pinned",
+        "ALTER TABLE books ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0",
+    )?;
     ensure_column(
         &conn,
         "chapters",

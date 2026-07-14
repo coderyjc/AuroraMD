@@ -3,6 +3,7 @@ export interface Book {
   name: string;
   rootPath: string;
   viewMode: string;
+  isPinned: boolean;
   createdAt: string;
   updatedAt: string;
 }
