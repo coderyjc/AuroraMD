@@ -111,6 +111,7 @@ export interface AppSettings {
   paragraphSpacing: number;
   surface: string;
   borderStyle: string;
+  focusMode: boolean;
   shortcutBindings: string;
 }
 

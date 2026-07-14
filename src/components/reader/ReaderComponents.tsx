@@ -434,6 +434,19 @@ export function SettingsPanel({
           </select>
         </label>
 
+        <label className="settings-toggle">
+          <span>
+            <strong>聚焦模式</strong>
+            <small>悬浮正文时，仅当前段落与相邻段落保持清晰。</small>
+          </span>
+          <input
+            type="checkbox"
+            checked={settings.focusMode}
+            onChange={(event) => onChange({ focusMode: event.target.checked })}
+          />
+          <i aria-hidden="true" />
+        </label>
+
         <RangeControl
           label="上下文字数"
           min={20}

@@ -47,6 +47,7 @@ import {
   type BookMenuState,
   DeleteBookModal,
   HomeSettingsModal,
+  NoteDetailModal,
   RenameBookModal,
   type RenameBookState,
   SearchModal,
@@ -113,6 +114,7 @@ export default function App() {
   const [commentOnly, setCommentOnly] = useState(false);
   const [selectedNoteIds, setSelectedNoteIds] = useState<string[]>([]);
   const [workbenchChapters, setWorkbenchChapters] = useState<Chapter[]>([]);
+  const [workbenchNoteDetail, setWorkbenchNoteDetail] = useState<NoteItem | null>(null);
   const [importDragActive, setImportDragActive] = useState(false);
   const [activeBook, setActiveBook] = useState<ReaderBook | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
@@ -1228,7 +1230,7 @@ export default function App() {
             onCommentOnlyChange={setCommentOnly}
             onToggleNote={toggleNoteSelection}
             onToggleAll={toggleAllFilteredNotes}
-            onOpenNote={(note) => void openNote(note)}
+            onOpenNote={setWorkbenchNoteDetail}
             onExportSelected={() => void exportSelectedNotes()}
             onMarkStatus={(status) => void updateSelectedNoteStatus(status)}
           />
@@ -1319,6 +1321,17 @@ export default function App() {
             onSaveExportPreset={saveExportPreset}
             onDeleteExportPreset={removeExportPreset}
             onClose={() => setHomeSettingsOpen(false)}
+          />
+        )}
+        {workbenchNoteDetail && (
+          <NoteDetailModal
+            note={workbenchNoteDetail}
+            onClose={() => setWorkbenchNoteDetail(null)}
+            onJump={() => {
+              const note = workbenchNoteDetail;
+              setWorkbenchNoteDetail(null);
+              void openNote(note);
+            }}
           />
         )}
         {searchOpen && (
@@ -1489,7 +1502,7 @@ export default function App() {
         <div className={`reading-surface border-${settings.borderStyle}`} ref={scrollRef}>
           <article
             ref={articleRef}
-            className="markdown-body"
+            className={`markdown-body ${settings.focusMode ? "focus-mode" : ""}`}
             onMouseUp={handleTextSelection}
             onContextMenu={handleReaderContextMenu}
             onClick={handleAnnotationClick}

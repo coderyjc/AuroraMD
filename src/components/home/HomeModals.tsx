@@ -1,14 +1,17 @@
-import { AlertTriangle, Archive, BookOpen, Check, Copy, Database, Download, FileText, FolderOpen, Keyboard, MessageSquare, Palette, Pencil, Plus, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
+import { AlertTriangle, Archive, ArrowRight, BookOpen, Check, Copy, Database, Download, FileText, FolderOpen, Keyboard, MessageSquare, Palette, Pencil, Plus, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useState } from "react";
 import {
   deleteChapterVersion,
   listChapterVersions,
   listChapters,
+  readChapterVersion,
   searchBookContent,
   updateChapterVersionLabel,
 } from "../../api";
 import { defaultShortcutBindings } from "../../constants";
+import { locateAnnotationInText } from "../../markdown";
 import type {
+  Annotation,
   AppSettings,
   BackupResult,
   BookSummary,
@@ -20,9 +23,12 @@ import type {
   ExportTemplate,
   FolderSyncReport,
   NoteItem,
+  ReadChapterResponse,
   ShortcutAction,
 } from "../../types";
+import { annotationStatusLabel } from "../../utils/annotations";
 import { chapterFileName } from "../../utils/chapters";
+import { type DiffBlock, diffMarkdownLines } from "../../utils/diff";
 import { parseShortcutBindings, shortcutActionLabel } from "../../utils/shortcuts";
 
 interface ContextMenuState {
@@ -32,6 +38,20 @@ interface ContextMenuState {
 
 export type BookMenuState = ContextMenuState & { book: BookSummary };
 export type RenameBookState = { book: BookSummary; name: string };
+
+interface VersionDiffResult {
+  base: ReadChapterResponse;
+  target: ReadChapterResponse;
+  blocks: DiffBlock[];
+  annotationChecks: AnnotationLocationCheck[];
+}
+
+interface AnnotationLocationCheck {
+  annotation: Annotation;
+  located: boolean;
+  targetStartOffset?: number;
+  method?: "source-offset" | "anchored-text";
+}
 
 const emptyExportPresetDraft: ExportPresetPayload = {
   name: "",
@@ -726,6 +746,68 @@ export function BatchExportModal({
   );
 }
 
+export function NoteDetailModal({
+  note,
+  onClose,
+  onJump,
+}: {
+  note: NoteItem;
+  onClose: () => void;
+  onJump: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="annotation-modal note-detail-modal" onMouseDown={(event) => event.stopPropagation()}>
+        <header>
+          <div>
+            <p className="eyebrow">Annotation Detail</p>
+            <h2>批注详情</h2>
+          </div>
+          <button className="icon-button" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </header>
+        <div className="note-detail-meta">
+          <span>
+            <small>书籍</small>
+            <strong>{note.bookName}</strong>
+          </span>
+          <span>
+            <small>章节</small>
+            <strong>{note.chapterTitle}</strong>
+          </span>
+          <span>
+            <small>状态</small>
+            <strong>{annotationStatusLabel(note.status)}</strong>
+          </span>
+          <span>
+            <small>创建时间</small>
+            <strong>{new Date(note.createdAt).toLocaleString()}</strong>
+          </span>
+        </div>
+        <div className="annotation-meta">
+          <span style={{ background: note.highlightColor }} />
+          <small>{note.headingPath || "无标题路径"}</small>
+        </div>
+        <section className="note-detail-section">
+          <strong>选中文本</strong>
+          <blockquote>{note.selectedText}</blockquote>
+        </section>
+        <section className="note-detail-section">
+          <strong>评论</strong>
+          <p>{note.comment.trim() || "无评论"}</p>
+        </section>
+        <div className="modal-actions">
+          <button onClick={onClose}>关闭</button>
+          <button className="primary-button" onClick={onJump}>
+            <ArrowRight size={16} /> 跳转到对应位置
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export function VersionManagerModal({
   book,
   onClose,
@@ -738,6 +820,10 @@ export function VersionManagerModal({
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [selectedChapterId, setSelectedChapterId] = useState("");
   const [versions, setVersions] = useState<ChapterVersion[]>([]);
+  const [diffBaseVersionId, setDiffBaseVersionId] = useState("");
+  const [diffTargetVersionId, setDiffTargetVersionId] = useState("");
+  const [diffResult, setDiffResult] = useState<VersionDiffResult | null>(null);
+  const [diffBusy, setDiffBusy] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -769,7 +855,12 @@ export function VersionManagerModal({
     setBusy(true);
     void listChapterVersions(selectedChapterId)
       .then((nextVersions) => {
-        if (!cancelled) setVersions(nextVersions);
+        if (!cancelled) {
+          setVersions(nextVersions);
+          setDiffResult(null);
+          setDiffTargetVersionId(nextVersions[0]?.id ?? "");
+          setDiffBaseVersionId(nextVersions[nextVersions.length - 1]?.id ?? nextVersions[0]?.id ?? "");
+        }
       })
       .catch((err) => {
         if (!cancelled) onError(readError(err));
@@ -783,6 +874,8 @@ export function VersionManagerModal({
   }, [selectedChapterId, onError]);
 
   const selectedChapter = chapters.find((chapter) => chapter.id === selectedChapterId);
+  const diffBaseVersion = versions.find((version) => version.id === diffBaseVersionId) ?? null;
+  const diffTargetVersion = versions.find((version) => version.id === diffTargetVersionId) ?? null;
 
   async function saveLabel(version: ChapterVersion, label: string) {
     setBusy(true);
@@ -800,11 +893,37 @@ export function VersionManagerModal({
     setBusy(true);
     try {
       await deleteChapterVersion(version.id);
-      setVersions((current) => current.filter((item) => item.id !== version.id));
+      setVersions((current) => {
+        const nextVersions = current.filter((item) => item.id !== version.id);
+        if (diffBaseVersionId === version.id) {
+          setDiffBaseVersionId(nextVersions[nextVersions.length - 1]?.id ?? nextVersions[0]?.id ?? "");
+        }
+        if (diffTargetVersionId === version.id) {
+          setDiffTargetVersionId(nextVersions[0]?.id ?? "");
+        }
+        setDiffResult(null);
+        return nextVersions;
+      });
     } catch (err) {
       onError(readError(err));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function compareVersions() {
+    if (!diffBaseVersionId || !diffTargetVersionId || diffBaseVersionId === diffTargetVersionId) return;
+    setDiffBusy(true);
+    try {
+      const [base, target] = await Promise.all([
+        readChapterVersion(diffBaseVersionId),
+        readChapterVersion(diffTargetVersionId),
+      ]);
+      setDiffResult(buildVersionDiff(base, target));
+    } catch (err) {
+      onError(readError(err));
+    } finally {
+      setDiffBusy(false);
     }
   }
 
@@ -835,7 +954,7 @@ export function VersionManagerModal({
           <section>
             <div className="version-heading">
               <strong>{selectedChapter ? chapterFileName(selectedChapter) : "选择章节"}</strong>
-              {busy && <small>处理中...</small>}
+              {(busy || diffBusy) && <small>处理中...</small>}
             </div>
             {versions.map((version) => {
               const isCurrent = selectedChapter?.currentVersionId === version.id;
@@ -850,11 +969,240 @@ export function VersionManagerModal({
                 />
               );
             })}
+            <div className="version-diff-panel">
+              <div className="version-diff-heading">
+                <div>
+                  <strong>章节版本 Diff</strong>
+                  <small>选择两个快照，比较正文变化和批注定位状态。</small>
+                </div>
+                <button
+                  className="primary-button"
+                  onClick={() => void compareVersions()}
+                  disabled={busy || diffBusy || versions.length < 2 || diffBaseVersionId === diffTargetVersionId}
+                >
+                  生成对比
+                </button>
+              </div>
+              <div className="version-diff-controls">
+                <label>
+                  基准版本
+                  <select
+                    value={diffBaseVersionId}
+                    onChange={(event) => {
+                      setDiffBaseVersionId(event.target.value);
+                      setDiffResult(null);
+                    }}
+                  >
+                    {versions.map((version) => (
+                      <option key={version.id} value={version.id}>
+                        {formatVersionLabel(version, selectedChapter?.currentVersionId)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  目标版本
+                  <select
+                    value={diffTargetVersionId}
+                    onChange={(event) => {
+                      setDiffTargetVersionId(event.target.value);
+                      setDiffResult(null);
+                    }}
+                  >
+                    {versions.map((version) => (
+                      <option key={version.id} value={version.id}>
+                        {formatVersionLabel(version, selectedChapter?.currentVersionId)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              {versions.length < 2 ? (
+                <p className="muted">这个章节目前只有一个版本，暂时无法对比。</p>
+              ) : diffBaseVersionId === diffTargetVersionId ? (
+                <p className="muted">请选择两个不同版本进行对比。</p>
+              ) : diffResult ? (
+                <VersionDiffView
+                  result={diffResult}
+                  baseVersion={diffBaseVersion}
+                  targetVersion={diffTargetVersion}
+                />
+              ) : (
+                <p className="muted">点击“生成对比”查看新增、删除、修改，以及基准版本批注是否还能定位到目标版本。</p>
+              )}
+            </div>
           </section>
         </div>
       </section>
     </div>
   );
+}
+
+function buildVersionDiff(base: ReadChapterResponse, target: ReadChapterResponse): VersionDiffResult {
+  return {
+    base,
+    target,
+    blocks: diffMarkdownLines(base.content, target.content),
+    annotationChecks: base.annotations.map((annotation) => {
+      const location = locateAnnotationInText(target.content, annotation);
+      return {
+        annotation,
+        located: Boolean(location),
+        targetStartOffset: location?.startOffset,
+        method: location?.method,
+      };
+    }),
+  };
+}
+
+function VersionDiffView({
+  result,
+  baseVersion,
+  targetVersion,
+}: {
+  result: VersionDiffResult;
+  baseVersion: ChapterVersion | null;
+  targetVersion: ChapterVersion | null;
+}) {
+  const added = result.blocks.filter((block) => block.type === "added").length;
+  const removed = result.blocks.filter((block) => block.type === "removed").length;
+  const modified = result.blocks.filter((block) => block.type === "modified").length;
+  const locatedAnnotations = result.annotationChecks.filter((item) => item.located).length;
+
+  return (
+    <div className="version-diff-result">
+      <div className="diff-summary-grid">
+        <span>
+          <small>基准</small>
+          <strong>{baseVersion ? formatVersionLabel(baseVersion, result.base.chapter.currentVersionId) : "版本 A"}</strong>
+        </span>
+        <span>
+          <small>目标</small>
+          <strong>{targetVersion ? formatVersionLabel(targetVersion, result.target.chapter.currentVersionId) : "版本 B"}</strong>
+        </span>
+        <span>
+          <small>新增</small>
+          <strong>{added}</strong>
+        </span>
+        <span>
+          <small>删除</small>
+          <strong>{removed}</strong>
+        </span>
+        <span>
+          <small>修改</small>
+          <strong>{modified}</strong>
+        </span>
+        <span>
+          <small>批注定位</small>
+          <strong>
+            {locatedAnnotations}/{result.annotationChecks.length}
+          </strong>
+        </span>
+      </div>
+
+      <section className="diff-section">
+        <div className="diff-section-heading">
+          <strong>正文差异</strong>
+          <small>{result.blocks.length ? `${result.blocks.length} 个变化块` : "没有正文变化"}</small>
+        </div>
+        {result.blocks.length ? (
+          <div className="diff-block-list">
+            {result.blocks.map((block) => (
+              <DiffBlockCard key={block.id} block={block} />
+            ))}
+          </div>
+        ) : (
+          <p className="muted">两个版本的正文快照一致。</p>
+        )}
+      </section>
+
+      <section className="diff-section">
+        <div className="diff-section-heading">
+          <strong>批注定位</strong>
+          <small>检查基准版本批注能否在目标版本中找到同一段文本</small>
+        </div>
+        {result.annotationChecks.length ? (
+          <div className="annotation-location-list">
+            {result.annotationChecks.map((item) => (
+              <article key={item.annotation.id} className={item.located ? "located" : "lost"}>
+                <span className="annotation-dot" style={{ background: item.annotation.highlightColor }} />
+                <div>
+                  <strong>{item.located ? "仍可定位" : "无法定位"}</strong>
+                  <p>{item.annotation.selectedText}</p>
+                  <small>
+                    {item.located
+                      ? `${item.method === "source-offset" ? "原始偏移" : "上下文锚点"} · 目标位置 ${item.targetStartOffset}`
+                      : "目标版本中未稳定找到这段批注文本"}
+                    {item.annotation.comment.trim() ? ` · ${item.annotation.comment.trim()}` : ""}
+                  </small>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="muted">基准版本没有批注。</p>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function DiffBlockCard({ block }: { block: DiffBlock }) {
+  return (
+    <article className={`diff-block ${block.type}`}>
+      <header>
+        <strong>{diffBlockLabel(block.type)}</strong>
+        <small>
+          原 {block.oldStart} · 新 {block.newStart}
+        </small>
+      </header>
+      {block.type === "added" ? (
+        <DiffLines lines={block.newLines} prefix="+" />
+      ) : block.type === "removed" ? (
+        <DiffLines lines={block.oldLines} prefix="-" />
+      ) : (
+        <div className="modified-lines">
+          <DiffLines lines={block.oldLines} prefix="-" />
+          <DiffLines lines={block.newLines} prefix="+" />
+        </div>
+      )}
+    </article>
+  );
+}
+
+function DiffLines({ lines, prefix }: { lines: string[]; prefix: "+" | "-" }) {
+  const visibleLines = lines.slice(0, 12);
+  const hiddenCount = Math.max(0, lines.length - visibleLines.length);
+  return (
+    <pre className={prefix === "+" ? "added-lines" : "removed-lines"}>
+      {visibleLines.map((line, index) => (
+        <code key={`${index}-${line}`}>
+          <span>{prefix}</span>
+          {line || " "}
+        </code>
+      ))}
+      {hiddenCount > 0 && (
+        <code>
+          <span>…</span>
+          另有 {hiddenCount} 行
+        </code>
+      )}
+    </pre>
+  );
+}
+
+function diffBlockLabel(type: DiffBlock["type"]) {
+  const labels: Record<DiffBlock["type"], string> = {
+    added: "新增",
+    removed: "删除",
+    modified: "修改",
+  };
+  return labels[type];
+}
+
+function formatVersionLabel(version: ChapterVersion, currentVersionId?: string) {
+  const base = version.id === currentVersionId ? `当前版本 v${version.versionNumber}` : `v${version.versionNumber}`;
+  return version.label.trim() ? `${base} · ${version.label.trim()}` : base;
 }
 
 function VersionRow({

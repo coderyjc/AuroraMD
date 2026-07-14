@@ -157,6 +157,37 @@ export function getContext(content: string, start: number, end: number, chars: n
   };
 }
 
+export function locateAnnotationInText(rootText: string, annotation: Annotation) {
+  if (
+    annotation.startOffset >= 0 &&
+    annotation.endOffset > annotation.startOffset &&
+    annotation.endOffset <= rootText.length &&
+    rootText.slice(annotation.startOffset, annotation.endOffset) === annotation.selectedText
+  ) {
+    return {
+      startOffset: annotation.startOffset,
+      endOffset: annotation.endOffset,
+      method: "source-offset" as const,
+    };
+  }
+
+  const anchoredStart = findAnchoredTextOffset(
+    rootText,
+    annotation.selectedText,
+    annotation.contextBefore,
+    annotation.contextAfter,
+  );
+  if (anchoredStart >= 0) {
+    return {
+      startOffset: anchoredStart,
+      endOffset: anchoredStart + annotation.selectedText.length,
+      method: "anchored-text" as const,
+    };
+  }
+
+  return null;
+}
+
 export function getHeadingPath(content: string, offset: number) {
   const headings: Array<{ level: number; title: string; offset: number }> = [];
   let cursor = 0;

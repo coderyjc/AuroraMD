@@ -1025,6 +1025,27 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
     } else {
         Ok(())
     };
+    let focus_mode_restore_result = if restore_result.is_ok()
+        && backup_has_column(&conn, "settings", "focus_mode")?
+    {
+        conn.execute_batch(
+            r#"
+            UPDATE settings
+            SET focus_mode = (
+                SELECT focus_mode
+                FROM backup.settings
+                WHERE backup.settings.id = settings.id
+            )
+            WHERE EXISTS (
+                SELECT 1
+                FROM backup.settings
+                WHERE backup.settings.id = settings.id
+            );
+            "#,
+        )
+    } else {
+        Ok(())
+    };
     let preset_restore_result = if restore_result.is_ok() && backup_has_table(&conn, "export_presets")? {
         conn.execute_batch(
             r#"
@@ -1043,6 +1064,8 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
     restore_result.map_err(|error| format!("Failed to restore backup: {error}"))?;
     rendered_anchor_restore_result
         .map_err(|error| format!("Failed to restore annotation anchors: {error}"))?;
+    focus_mode_restore_result
+        .map_err(|error| format!("Failed to restore focus mode setting: {error}"))?;
     preset_restore_result.map_err(|error| format!("Failed to restore export presets: {error}"))?;
     detach_result.map_err(|error| format!("Failed to close backup database: {error}"))?;
 
@@ -1075,7 +1098,8 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
             paragraph_spacing = ?8,
             surface = ?9,
             border_style = ?10,
-            shortcut_bindings = ?11
+            focus_mode = ?11,
+            shortcut_bindings = ?12
         WHERE id = 1
         "#,
         params![
@@ -1091,6 +1115,7 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
             patch.paragraph_spacing.unwrap_or(current.paragraph_spacing),
             patch.surface.unwrap_or(current.surface),
             patch.border_style.unwrap_or(current.border_style),
+            patch.focus_mode.unwrap_or(current.focus_mode),
             patch.shortcut_bindings.unwrap_or(current.shortcut_bindings)
         ],
     )
@@ -1824,6 +1849,7 @@ fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
             paragraph_spacing,
             surface,
             border_style,
+            focus_mode,
             shortcut_bindings
         FROM settings
         WHERE id = 1
@@ -1841,7 +1867,8 @@ fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
                 paragraph_spacing: row.get(7)?,
                 surface: row.get(8)?,
                 border_style: row.get(9)?,
-                shortcut_bindings: row.get(10)?,
+                focus_mode: row.get(10)?,
+                shortcut_bindings: row.get(11)?,
             })
         },
     )

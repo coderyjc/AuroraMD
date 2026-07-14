@@ -23,5 +23,6 @@ export const defaultSettings: AppSettings = {
   paragraphSpacing: 18,
   surface: "warm",
   borderStyle: "hairline",
+  focusMode: false,
   shortcutBindings: JSON.stringify(defaultShortcutBindings),
 };

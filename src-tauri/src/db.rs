@@ -88,6 +88,7 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
             paragraph_spacing INTEGER NOT NULL,
             surface TEXT NOT NULL,
             border_style TEXT NOT NULL,
+            focus_mode INTEGER NOT NULL DEFAULT 0,
             shortcut_bindings TEXT NOT NULL
         );
 
@@ -142,6 +143,12 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
     ensure_column(
         &conn,
         "settings",
+        "focus_mode",
+        "ALTER TABLE settings ADD COLUMN focus_mode INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(
+        &conn,
+        "settings",
         "shortcut_bindings",
         "ALTER TABLE settings ADD COLUMN shortcut_bindings TEXT NOT NULL DEFAULT '{\"search\":\"Ctrl+K\",\"nextChapter\":\"N\",\"previousChapter\":\"P\",\"highlight\":\"H\",\"export\":\"E\",\"toggleLeft\":\"[\",\"toggleRight\":\"]\"}'",
     )?;
@@ -174,8 +181,9 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
             paragraph_spacing,
             surface,
             border_style,
+            focus_mode,
             shortcut_bindings
-        ) VALUES (1, 100, 'paper', 'Literata, Georgia, serif', 18, 1.72, 820, 52, 18, 'warm', 'hairline', '{"search":"Ctrl+K","nextChapter":"N","previousChapter":"P","highlight":"H","export":"E","toggleLeft":"[","toggleRight":"]"}')
+        ) VALUES (1, 100, 'paper', 'Literata, Georgia, serif', 18, 1.72, 820, 52, 18, 'warm', 'hairline', 0, '{"search":"Ctrl+K","nextChapter":"N","previousChapter":"P","highlight":"H","export":"E","toggleLeft":"[","toggleRight":"]"}')
         "#,
         [],
     )?;

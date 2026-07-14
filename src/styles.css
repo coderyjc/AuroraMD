@@ -1232,6 +1232,22 @@ button:disabled {
   border-radius: 8px;
 }
 
+.markdown-body.focus-mode > * {
+  transition: opacity 180ms ease, filter 180ms ease, transform 180ms ease;
+}
+
+.markdown-body.focus-mode:hover > * {
+  opacity: 0.28;
+  filter: grayscale(0.55);
+}
+
+.markdown-body.focus-mode:hover > *:hover,
+.markdown-body.focus-mode:hover > *:hover + *,
+.markdown-body.focus-mode:hover > *:has(+ :hover) {
+  opacity: 1;
+  filter: none;
+}
+
 .annotation-mark {
   border-radius: 3px;
   background: var(--mark-color);
@@ -1598,6 +1614,68 @@ body.sorting-drag-active * {
 
 .compact-modal {
   width: min(520px, calc(100vw - 44px));
+}
+
+.note-detail-modal {
+  width: min(720px, calc(100vw - 44px));
+}
+
+.note-detail-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.note-detail-meta span {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--paper-strong) 78%, transparent);
+  padding: 10px;
+}
+
+.note-detail-meta small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.note-detail-meta strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-detail-section {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.note-detail-section > strong {
+  font-size: 13px;
+}
+
+.note-detail-section blockquote {
+  max-height: 220px;
+  overflow: auto;
+  border-left: 4px solid var(--accent);
+  color: var(--muted);
+  margin: 0;
+  padding-left: 14px;
+}
+
+.note-detail-section p {
+  min-height: 62px;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--paper-strong) 78%, transparent);
+  color: var(--ink);
+  line-height: 1.55;
+  padding: 12px;
 }
 
 .danger-eyebrow {
@@ -2000,12 +2078,12 @@ body.sorting-drag-active * {
 }
 
 .version-modal {
-  width: min(980px, calc(100vw - 44px));
+  width: min(1180px, calc(100vw - 44px));
 }
 
 .version-manager {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-columns: 250px minmax(0, 1fr);
   gap: 14px;
   margin-top: 18px;
 }
@@ -2071,6 +2149,213 @@ body.sorting-drag-active * {
 
 .version-row .danger {
   border-color: #e2b8ad;
+  color: #a83221;
+}
+
+.version-diff-panel {
+  margin-top: 16px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.version-diff-heading,
+.version-diff-controls,
+.diff-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.version-diff-heading div,
+.diff-section-heading {
+  min-width: 0;
+}
+
+.version-diff-heading small,
+.diff-section-heading small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.version-diff-controls {
+  align-items: flex-end;
+  margin-top: 12px;
+}
+
+.version-diff-controls label {
+  display: grid;
+  flex: 1;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 780;
+}
+
+.version-diff-controls select {
+  min-height: 38px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper-strong);
+  color: var(--ink);
+  padding: 0 10px;
+}
+
+.version-diff-result {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.diff-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.diff-summary-grid span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--paper-strong) 82%, transparent);
+  padding: 10px;
+}
+
+.diff-summary-grid small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.diff-summary-grid strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-section {
+  display: grid;
+  gap: 10px;
+}
+
+.diff-block-list,
+.annotation-location-list {
+  display: grid;
+  max-height: 360px;
+  gap: 8px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.diff-block {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--paper-strong) 84%, transparent);
+}
+
+.diff-block header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+  padding: 8px 10px;
+}
+
+.diff-block.added header {
+  color: #1f7a4b;
+}
+
+.diff-block.removed header {
+  color: #a83221;
+}
+
+.diff-block.modified header {
+  color: var(--accent);
+}
+
+.diff-block small {
+  color: var(--muted);
+}
+
+.modified-lines {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.diff-block pre {
+  margin: 0;
+  overflow: auto;
+  background: transparent;
+  font-family: "JetBrains Mono", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.modified-lines pre + pre {
+  border-left: 1px solid var(--line);
+}
+
+.diff-block code {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 8px;
+  padding: 2px 10px;
+  white-space: pre-wrap;
+}
+
+.diff-block code span {
+  color: var(--muted);
+  user-select: none;
+}
+
+.added-lines code {
+  background: color-mix(in srgb, #38a169 13%, transparent);
+}
+
+.removed-lines code {
+  background: color-mix(in srgb, #d84b3f 12%, transparent);
+}
+
+.annotation-location-list article {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr);
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--paper-strong) 84%, transparent);
+  padding: 10px;
+}
+
+.annotation-location-list article.lost {
+  border-color: color-mix(in srgb, #d84b3f 34%, var(--line));
+}
+
+.annotation-location-list p {
+  display: -webkit-box;
+  margin: 4px 0;
+  overflow: hidden;
+  color: var(--ink);
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.annotation-location-list small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.annotation-location-list article.located strong {
+  color: #1f7a4b;
+}
+
+.annotation-location-list article.lost strong {
   color: #a83221;
 }
 
@@ -2188,6 +2473,68 @@ body.sorting-drag-active * {
 
 .settings-panel label strong {
   color: var(--accent);
+}
+
+.settings-toggle {
+  position: relative;
+  grid-template-columns: minmax(0, 1fr) 48px;
+  align-items: center;
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--paper-strong) 72%, transparent);
+  padding: 12px;
+}
+
+.settings-toggle span {
+  display: grid;
+  gap: 4px;
+  justify-content: stretch;
+}
+
+.settings-toggle small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.settings-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.settings-toggle i {
+  position: relative;
+  width: 46px;
+  height: 26px;
+  border: 1px solid var(--button-border);
+  border-radius: 999px;
+  background: var(--button-bg);
+  transition: background 180ms ease, border-color 180ms ease;
+}
+
+.settings-toggle i::after {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  content: "";
+  border-radius: 50%;
+  background: var(--button-ink);
+  transition: transform 180ms ease, background 180ms ease;
+}
+
+.settings-toggle input:checked + i {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 28%, var(--paper-strong));
+}
+
+.settings-toggle input:checked + i::after {
+  transform: translateX(20px);
+  background: var(--accent);
 }
 
 .settings-panel input[type="range"] {
@@ -2351,6 +2698,28 @@ body.sorting-drag-active * {
 .surface-ink .delete-book-warning {
   border-color: color-mix(in srgb, #ff8d7c 42%, var(--line));
   background: color-mix(in srgb, #ff8d7c 9%, var(--paper-strong));
+}
+
+.theme-night .diff-block.added header,
+.theme-night .annotation-location-list article.located strong,
+.theme-midnight .diff-block.added header,
+.theme-midnight .annotation-location-list article.located strong,
+.theme-graphite .diff-block.added header,
+.theme-graphite .annotation-location-list article.located strong,
+.surface-ink .diff-block.added header,
+.surface-ink .annotation-location-list article.located strong {
+  color: #90e3b5;
+}
+
+.theme-night .diff-block.removed header,
+.theme-night .annotation-location-list article.lost strong,
+.theme-midnight .diff-block.removed header,
+.theme-midnight .annotation-location-list article.lost strong,
+.theme-graphite .diff-block.removed header,
+.theme-graphite .annotation-location-list article.lost strong,
+.surface-ink .diff-block.removed header,
+.surface-ink .annotation-location-list article.lost strong {
+  color: #ffb4a8;
 }
 
 .theme-night,

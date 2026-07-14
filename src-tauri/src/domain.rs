@@ -183,6 +183,7 @@ pub struct AppSettings {
     pub paragraph_spacing: i64,
     pub surface: String,
     pub border_style: String,
+    pub focus_mode: bool,
     pub shortcut_bindings: String,
 }
 
@@ -220,6 +221,7 @@ pub struct SettingsPatch {
     pub paragraph_spacing: Option<i64>,
     pub surface: Option<String>,
     pub border_style: Option<String>,
+    pub focus_mode: Option<bool>,
     pub shortcut_bindings: Option<String>,
 }
 
