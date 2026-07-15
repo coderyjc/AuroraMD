@@ -102,6 +102,25 @@ export interface ReadChapterResponse {
   annotations: Annotation[];
 }
 
+export interface ImportPreviewFile {
+  path: string;
+  relativePath: string;
+  name: string;
+  size: number;
+}
+
+export interface ImportBookPreview {
+  rootPath: string;
+  defaultName: string;
+  files: ImportPreviewFile[];
+}
+
+export interface ImportBookPayload {
+  rootPath: string;
+  bookName: string;
+  filePaths: string[];
+}
+
 export interface AppSettings {
   annotationContextChars: number;
   themeSeries: string;

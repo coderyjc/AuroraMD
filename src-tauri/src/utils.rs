@@ -75,13 +75,8 @@ pub fn chapter_title_from_path(path: &Path, index: usize) -> String {
         .unwrap_or_else(|| format!("Chapter {}", index + 1))
 }
 
-pub fn chapter_title_from_root(root_path: &Path, path: &Path, index: usize) -> String {
-    path.strip_prefix(root_path)
-        .ok()
-        .and_then(|relative| relative.to_str())
-        .map(|title| title.replace('\\', "/"))
-        .filter(|title| !title.trim().is_empty())
-        .unwrap_or_else(|| chapter_title_from_path(path, index))
+pub fn chapter_title_from_root(_root_path: &Path, path: &Path, index: usize) -> String {
+    chapter_title_from_path(path, index)
 }
 
 pub fn chapter_file_name_from_path(path: &str) -> String {

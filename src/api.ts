@@ -16,6 +16,8 @@ import type {
   ExportTaskGoal,
   ExportTemplate,
   FolderSyncReport,
+  ImportBookPayload,
+  ImportBookPreview,
   NoteItem,
   ReadChapterResponse,
   ReadingProgress,
@@ -27,6 +29,14 @@ export async function pickBookFolder() {
 
 export async function importBookFolder(path: string) {
   return invoke<{ book: Book; chapters: Chapter[] }>("import_book_folder", { path });
+}
+
+export async function previewImportBookFolder(path: string) {
+  return invoke<ImportBookPreview>("preview_import_book_folder", { path });
+}
+
+export async function importBookSelection(payload: ImportBookPayload) {
+  return invoke<{ book: Book; chapters: Chapter[] }>("import_book_selection", { payload });
 }
 
 export async function listBooks() {

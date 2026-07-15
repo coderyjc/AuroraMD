@@ -88,6 +88,7 @@ export function AnnotationContextMenu({
 }
 
 export function SortChaptersModal({
+  closing,
   chapters,
   activeChapterId,
   dragChapterId,
@@ -97,6 +98,7 @@ export function SortChaptersModal({
   onClose,
   onSave,
 }: {
+  closing: boolean;
   chapters: Chapter[];
   activeChapterId?: string;
   dragChapterId: string | null;
@@ -145,7 +147,7 @@ export function SortChaptersModal({
 
   return (
     <div
-      className="modal-backdrop"
+      className={`modal-backdrop ${closing ? "is-closing" : ""}`}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) {
           onClose();
@@ -326,11 +328,13 @@ export function ExportModal({
 }
 
 export function NewAnnotationModal({
+  closing,
   draft,
   onChange,
   onCancel,
   onSave,
 }: {
+  closing: boolean;
   draft: SelectionDraft;
   onChange: (draft: SelectionDraft) => void;
   onCancel: () => void;
@@ -338,7 +342,7 @@ export function NewAnnotationModal({
 }) {
   return (
     <div
-      className="modal-backdrop"
+      className={`modal-backdrop ${closing ? "is-closing" : ""}`}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) {
           onCancel();
@@ -610,17 +614,26 @@ export function SettingsPanel({
 export function TopNotice({
   error,
   notice,
+  closing,
   onClose,
 }: {
   error: string;
   notice: string;
+  closing: boolean;
   onClose: () => void;
 }) {
   const text = error || notice;
   if (!text) return null;
   return (
-    <div className={`top-notice ${error ? "error" : ""}`} role={error ? "alert" : "status"}>
+    <div
+      className={`top-notice ${error ? "error" : ""} ${closing ? "is-closing" : ""}`}
+      role={error ? "alert" : "status"}
+    >
       <span>{text}</span>
+      <svg className="notice-ring" viewBox="0 0 18 18" aria-hidden="true">
+        <circle className="notice-ring-track" cx="9" cy="9" r="7" />
+        <circle className="notice-ring-progress" cx="9" cy="9" r="7" />
+      </svg>
       <button className="icon-button small" onClick={onClose}>
         <X size={14} />
       </button>

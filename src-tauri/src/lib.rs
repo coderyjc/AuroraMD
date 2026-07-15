@@ -1,7 +1,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{Manager, State};
 
@@ -40,7 +40,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             pick_book_folder,
+            preview_import_book_folder,
             import_book_folder,
+            import_book_selection,
             list_books,
             get_book,
             update_book_name,
@@ -234,52 +236,161 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
 }
 
 #[tauri::command]
-fn import_book_folder(path: String, state: State<AppState>) -> AppResult<BookWithChapters> {
-    let root = PathBuf::from(path);
-    if !root.is_dir() {
-        return Err("Selected path is not a folder.".to_string());
+fn preview_import_book_folder(path: String) -> AppResult<ImportBookPreview> {
+    let root_path = resolve_import_root(&path)?;
+    let md_files = scan_markdown_files(&root_path)?;
+    if md_files.is_empty() {
+        return Err("这个文件夹中没有找到 Markdown 文件。".to_string());
     }
 
-    let root_path = root
-        .canonicalize()
-        .map_err(|error| format!("Failed to resolve folder path: {error}"))?;
+    let files = md_files
+        .iter()
+        .map(|file_path| {
+            let relative_path = file_path
+                .strip_prefix(&root_path)
+                .ok()
+                .and_then(|relative| relative.to_str())
+                .map(|relative| relative.replace('\\', "/"))
+                .unwrap_or_else(|| chapter_file_name_from_path(&path_to_string(file_path)));
+            let name = file_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("未命名文件.md")
+                .to_string();
+            let size = fs::metadata(file_path)
+                .map(|metadata| metadata.len() as i64)
+                .unwrap_or(0);
+            ImportPreviewFile {
+                path: path_to_string(file_path),
+                relative_path,
+                name,
+                size,
+            }
+        })
+        .collect();
+
+    Ok(ImportBookPreview {
+        default_name: default_book_name_from_path(&root_path),
+        root_path: path_to_string(&root_path),
+        files,
+    })
+}
+
+#[tauri::command]
+fn import_book_folder(path: String, state: State<AppState>) -> AppResult<BookWithChapters> {
+    let root_path = resolve_import_root(&path)?;
+    let md_files = scan_markdown_files(&root_path)?;
+    let book_name = default_book_name_from_path(&root_path);
+    import_book_from_files(&state, root_path, book_name, md_files)
+}
+
+#[tauri::command]
+fn import_book_selection(
+    payload: ImportBookPayload,
+    state: State<AppState>,
+) -> AppResult<BookWithChapters> {
+    let root_path = resolve_import_root(&payload.root_path)?;
+    let book_name = import_book_name_from_input(&payload.book_name);
+    if book_name.is_empty() {
+        return Err("书籍名称不能为空。".to_string());
+    }
+    if payload.file_paths.is_empty() {
+        return Err("请选择至少一个 Markdown 文件。".to_string());
+    }
+
+    let mut seen = HashSet::new();
+    let mut md_files = Vec::new();
+    for file_path in payload.file_paths {
+        let canonical = PathBuf::from(&file_path)
+            .canonicalize()
+            .map_err(|error| format!("无法解析章节路径：{error}"))?;
+        if !canonical.starts_with(&root_path) {
+            return Err("只能导入所选文件夹内部的 Markdown 文件。".to_string());
+        }
+        let is_markdown = canonical
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| extension.eq_ignore_ascii_case("md"))
+            .unwrap_or(false);
+        if !canonical.is_file() || !is_markdown {
+            return Err("只能导入 Markdown 文件。".to_string());
+        }
+        if seen.insert(path_to_string(&canonical)) {
+            md_files.push(canonical);
+        }
+    }
+
+    if md_files.is_empty() {
+        return Err("请选择至少一个 Markdown 文件。".to_string());
+    }
+
+    import_book_from_files(&state, root_path, book_name, md_files)
+}
+
+fn resolve_import_root(path: &str) -> AppResult<PathBuf> {
+    let root = PathBuf::from(path.trim());
+    if !root.is_dir() {
+        return Err("选择的路径不是文件夹。".to_string());
+    }
+    root.canonicalize()
+        .map_err(|error| format!("无法解析文件夹路径：{error}"))
+}
+
+fn default_book_name_from_path(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("未命名书籍")
+        .to_string()
+}
+
+fn import_book_name_from_input(input: &str) -> String {
+    let trimmed = input.trim().trim_matches(|character| character == '/' || character == '\\');
+    trimmed
+        .rsplit(|character| character == '/' || character == '\\')
+        .find(|part| !part.trim().is_empty())
+        .unwrap_or(trimmed)
+        .trim()
+        .to_string()
+}
+
+fn import_book_from_files(
+    state: &State<AppState>,
+    root_path: PathBuf,
+    book_name: String,
+    md_files: Vec<PathBuf>,
+) -> AppResult<BookWithChapters> {
+    if md_files.is_empty() {
+        return Err("这个文件夹中没有找到 Markdown 文件。".to_string());
+    }
+
     let root_path_text = path_to_string(&root_path);
-    let mut conn = lock_conn(&state)?;
+    let mut conn = lock_conn(state)?;
 
     if let Some(book) = get_book_by_root_path(&conn, &root_path_text)? {
         let chapters = load_chapters(&conn, &book.id)?;
         return Ok(BookWithChapters { book, chapters });
     }
 
-    let md_files = scan_markdown_files(&root_path)?;
-
-    if md_files.is_empty() {
-        return Err("No Markdown files were found in this folder.".to_string());
-    }
-
     let now = now();
     let book_id = new_id();
-    let book_name = root_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("Untitled Book")
-        .to_string();
+    let trimmed_book_name = book_name.trim();
 
     let tx = conn
         .transaction()
-        .map_err(|error| format!("Failed to start import transaction: {error}"))?;
+        .map_err(|error| format!("启动导入事务失败：{error}"))?;
     tx.execute(
         r#"
         INSERT INTO books (id, name, root_path, view_mode, created_at, updated_at)
         VALUES (?1, ?2, ?3, 'grid', ?4, ?4)
         "#,
-        params![book_id, book_name, root_path_text, now],
+        params![book_id, trimmed_book_name, root_path_text, now],
     )
-    .map_err(|error| format!("Failed to create book: {error}"))?;
+    .map_err(|error| format!("创建书籍失败：{error}"))?;
 
     for (index, file_path) in md_files.iter().enumerate() {
         let content = fs::read_to_string(file_path)
-            .map_err(|error| format!("Failed to read {}: {error}", path_to_string(file_path)))?;
+            .map_err(|error| format!("读取文件失败：{}：{error}", path_to_string(file_path)))?;
         let title = chapter_title_from_root(&root_path, file_path, index);
         let chapter_id = new_id();
         let version_id = new_id();
@@ -302,7 +413,7 @@ fn import_book_folder(path: String, state: State<AppState>) -> AppResult<BookWit
                 now
             ],
         )
-        .map_err(|error| format!("Failed to create chapter: {error}"))?;
+        .map_err(|error| format!("创建章节失败：{error}"))?;
 
         tx.execute(
             r#"
@@ -311,11 +422,11 @@ fn import_book_folder(path: String, state: State<AppState>) -> AppResult<BookWit
             "#,
             params![version_id, chapter_id, content_hash, content, now],
         )
-        .map_err(|error| format!("Failed to create chapter version: {error}"))?;
+        .map_err(|error| format!("创建章节版本失败：{error}"))?;
     }
 
     tx.commit()
-        .map_err(|error| format!("Failed to finish import: {error}"))?;
+        .map_err(|error| format!("完成导入失败：{error}"))?;
 
     let book = get_book_by_id(&conn, &book_id)?;
     let chapters = load_chapters(&conn, &book_id)?;

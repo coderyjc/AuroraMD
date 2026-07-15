@@ -8,27 +8,28 @@ Loop Book 是一个本地优先的 Markdown 桌面阅读器，用来阅读按章
 
 如果重开 Codex 会话，请先读本节和下面的“开发踩坑记录”。当前项目状态以本 README 为准。
 
-- 当前版本：`v0.4.2`。
+- 当前版本：`v0.4.3`。
 - 当前工作区：`E:\code\github\annotaloop`。
 - 用户验证入口：`src-tauri/target/release/loop-book.exe`。完成功能或修复后，默认直接执行 `npm.cmd run tauri -- build`，不要只停在前端构建或 dev server。
-- 最近一次 release 构建输出为 `src-tauri/target/release/loop-book.exe` 和 `src-tauri/target/release/bundle/nsis/Loop Book_0.4.2_x64-setup.exe`。
+- 最近一次 release 构建输出为 `src-tauri/target/release/loop-book.exe` 和 `src-tauri/target/release/bundle/nsis/Loop Book_0.4.3_x64-setup.exe`。
 - 目前窗口已改为 Tauri 无原生装饰窗口：`src-tauri/tauri.conf.json` 中 `decorations` 为 `false`，应用内标题栏在 `src/App.tsx` 的 `AppTitlebar` 和 `src/styles.css` 的 `.desktop-titlebar`。
 - 首页 gallery 书籍置顶不是图钉方案，而是左侧渐变色条；对应样式是 `.book-entry::before` 和 `.book-entry.is-pinned::before`。
 - 阅读器正文上方显示“本文共 xx 字 / 阅读需要 xx 分钟”，正文底部有“上一篇 / 下一篇”导航。
+- UI/UX 规则：所有模态框打开时都要有打开动画，关闭时都要有消失动画；新增或改造模态框时必须接入 `closing` 状态和 `.is-closing` 样式，不要直接从 DOM 中硬移除。
 - README 中 PowerShell 中文乱码、Tauri 构建缓存、release exe 被占用等坑已经记录在“开发踩坑记录”，遇到相似问题优先按那里排查。
 
 ## 功能
 
-- 在首页 gallery 中以书籍卡片管理本地 Markdown 书稿；末尾导入卡片支持拖入文件夹或点击选择文件夹。
-- 导入包含 `.md` 文件的本地文件夹，并按文件生成章节；原始文件保留在原处。
-- gallery 书籍卡片支持右键菜单：置顶/取消置顶、重命名、在资源管理器打开、同步文件夹、版本管理和删除本地索引；置顶书籍显示在最前，并用左侧渐变色条标识。
+- 在首页 gallery 中以书籍卡片管理本地 Markdown 书稿；支持把文件夹拖入书架 gallery 区域或点击导入卡片选择文件夹。
+- 导入包含 `.md` 文件的本地文件夹时，会先弹出导入书籍模态框，用层级目录和复选框选择要导入的 Markdown 文件，并可在导入前修改书名；原始文件保留在原处。
+- gallery 书籍卡片支持右键菜单：置顶/取消置顶、管理、重命名、同步文件夹、在资源管理器打开和删除本地索引；置顶书籍显示在最前，并用左侧渐变色条标识。
 - 应用窗口使用随主题变化的自定义标题栏，支持拖动窗口、双击最大化、最小化、最大化/还原和关闭。
 - 首页批注工作台支持按书籍、章节、状态筛选，批量选择、批量导出和批量标记；点击批注先打开详情模态框，再手动跳转到阅读位置。
 - 阅读 Markdown 内容，支持相对路径图片在 Tauri 桌面环境中显示。
 - 自动提取章节标题和大纲，支持章节列表和大纲跳转。
 - 选中文本后创建跨行高亮批注，保存渲染文本锚点、上下文、标题路径、颜色和评论。
 - 按章节维护内容快照，原始 Markdown 变更后会生成新的章节版本。
-- 版本管理支持选择两个章节版本做 Diff，对新增、删除、修改进行分组展示，并检查旧批注是否仍能定位到目标版本。
+- 管理模态框支持选择两个章节版本做 Diff，对新增、删除、修改进行分组展示，并检查旧批注是否仍能定位到目标版本；左侧章节列表支持拖拽排序、独立滚动和拖动分隔条调节左右栏宽度。
 - 保存阅读进度，重新打开书籍时恢复最近阅读位置。
 - 支持拖拽调整章节顺序。
 - 阅读器左栏、正文区、右栏宽度可拖拽调整；左栏内“大纲/章节”的分隔位置也可拖拽调整。
@@ -147,7 +148,7 @@ npm.cmd run tauri -- build
 
 ```text
 src-tauri/target/release/loop-book.exe
-src-tauri/target/release/bundle/nsis/Loop Book_0.4.2_x64-setup.exe
+src-tauri/target/release/bundle/nsis/Loop Book_0.4.3_x64-setup.exe
 ```
 
 ## 数据存储
@@ -236,19 +237,19 @@ src-tauri/target/release/loop-book.exe
   2. `cargo check`（在 `src-tauri/` 下）
   3. `cargo test`（在 `src-tauri/` 下）
   4. `npm.cmd run tauri -- build`
-- 当前 v0.4.2 主题命令面板和快捷键修复后已通过：
+- 当前 v0.4.3 UI/UX 导入与管理模态框优化后已通过：
   - `npm.cmd run build`
   - `npm.cmd run tauri -- build`
-- 最近一次 v0.4.2 release 构建输出：
+- 最近一次 v0.4.3 release 构建输出：
   - `src-tauri/target/release/loop-book.exe`
-  - `src-tauri/target/release/bundle/nsis/Loop Book_0.4.2_x64-setup.exe`
+  - `src-tauri/target/release/bundle/nsis/Loop Book_0.4.3_x64-setup.exe`
 - 最近一次自定义标题栏更新后已通过：
   - `npm.cmd run build`
   - `npm.cmd run tauri -- build`
 - Windows 安装包输出位置通常是：
 
 ```text
-src-tauri/target/release/bundle/nsis/Loop Book_0.4.2_x64-setup.exe
+src-tauri/target/release/bundle/nsis/Loop Book_0.4.3_x64-setup.exe
 ```
 - 如果 `cargo check` 或 Tauri 打包时报错，提示去读取另一个旧目录下的 `target/.../permissions/...app_hide.toml`，通常是 Tauri/Rust 构建缓存里残留了旧绝对路径。排查时可以临时使用独立 target 目录：
 
@@ -258,6 +259,16 @@ cargo check
 ```
 
 清理临时目录前先确认路径仍在当前工作区内，必要时把只读属性归一化后再删，避免误删工作区外文件或被 Windows 文件属性拦住。
+
+## v0.4.3 功能摘要
+
+- 书籍导入流程改为先打开导入书籍模态框，使用层级目录和复选框选择要导入的 Markdown 文件，支持全选、反选和导入前修改书名。
+- 文件夹拖拽导入范围扩大到主页书架 gallery 区域，不再需要精确拖到导入卡片。
+- 导入单个 Markdown 文件时，默认书名和章节标题取最终文件名，避免把 `subfolder/1.md` 这样的相对路径作为名称。
+- 主页书籍右键菜单中“版本管理”改名为“管理”，菜单顺序调整为置顶、管理、重命名、同步文件夹、在资源管理器打开，删除仍在末尾。
+- 管理模态框左侧章节列表支持拖拽排序，松手后自动保存；左侧列表独立滚动，左右栏之间可拖动调节宽度，左栏最多占 40%。
+- 顶部提示气泡统一中文化、2 秒自动消失，并带有主题适配的环形倒计时和进出场动画。
+- 新增并统一重命名、导入、删除、同步报告、版本管理等模态框的打开和关闭动画。
 
 ## v0.4.2 功能摘要
 
@@ -271,7 +282,7 @@ cargo check
 - 阅读器新增搜索面板：位于批注栏下半部分，可调节高度，支持 `Ctrl+F` 激活、正文搜索高亮、结果摘要列表和点击跳转。
 - 多处界面关闭、切换和跳转补充快速流畅的过渡动画，包括 `Ctrl+K`、主页设置、批注详情、右键菜单、导出弹窗、主页/阅读器切换、视图切换、章节/搜索/批注跳转等场景。
 - 下拉列表的下拉部分已统一美化并遵循当前主题，同时保持下拉框本体样式不被额外染色。
-- 顶部通知气泡增加 3 秒自动消失时间，例如“已取消置顶”这类提示。
+- 顶部通知气泡改为 2 秒自动消失，并带有随主题适配的环形倒计时和进出场动画，例如“已取消置顶”这类提示。
 
 ## v0.3.0 功能摘要
 

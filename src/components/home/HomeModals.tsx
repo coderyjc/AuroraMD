@@ -1,10 +1,11 @@
-import { AlertTriangle, Archive, ArrowRight, BookOpen, Check, Copy, Database, Download, FileText, FolderOpen, Keyboard, MessageSquare, Palette, Pencil, Pin, PinOff, Plus, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
-import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle, Archive, ArrowRight, BookOpen, Check, Copy, Database, Download, FileText, FolderOpen, GripVertical, Keyboard, MessageSquare, Palette, Pencil, Pin, PinOff, Plus, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
+import { type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   deleteChapterVersion,
   listChapterVersions,
   listChapters,
   readChapterVersion,
+  reorderChapters,
   searchBookContent,
   updateChapterVersionLabel,
 } from "../../api";
@@ -28,6 +29,8 @@ import type {
   ExportPresetPayload,
   ExportTemplate,
   FolderSyncReport,
+  ImportBookPreview,
+  ImportPreviewFile,
   NoteItem,
   ReadChapterResponse,
   ShortcutAction,
@@ -91,6 +94,14 @@ const exportTemplateLabels: Record<ExportTemplate, string> = {
   "question-list": "问题清单模板",
   "annotation-index": "全书批注索引",
 };
+
+interface ImportTreeNode {
+  id: string;
+  name: string;
+  file?: ImportPreviewFile;
+  children: ImportTreeNode[];
+  filePaths: string[];
+}
 
 const themeOptions = [
   {
@@ -180,17 +191,17 @@ export function BookContextMenu({
         {menu.book.isPinned ? <PinOff size={15} /> : <Pin size={15} />}
         {menu.book.isPinned ? "取消置顶" : "置顶"}
       </button>
+      <button onClick={onVersions}>
+        <Archive size={15} /> 管理
+      </button>
       <button onClick={onRename}>
         <Pencil size={15} /> 重命名书籍
-      </button>
-      <button onClick={onOpenFolder}>
-        <FolderOpen size={15} /> 在资源管理器打开
       </button>
       <button onClick={onSync}>
         <RefreshCw size={15} /> 同步文件夹
       </button>
-      <button onClick={onVersions}>
-        <Archive size={15} /> 版本管理
+      <button onClick={onOpenFolder}>
+        <FolderOpen size={15} /> 在资源管理器打开
       </button>
       <button className="danger" onClick={onDelete}>
         <Trash2 size={15} /> 删除书籍
@@ -200,12 +211,14 @@ export function BookContextMenu({
 }
 
 export function RenameBookModal({
+  closing,
   draft,
   busy,
   onChange,
   onClose,
   onSave,
 }: {
+  closing: boolean;
   draft: RenameBookState;
   busy: boolean;
   onChange: (name: string) => void;
@@ -213,7 +226,10 @@ export function RenameBookModal({
   onSave: () => void;
 }) {
   return (
-    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <div
+      className={`modal-backdrop ${closing ? "is-closing" : ""}`}
+      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+    >
       <section className="annotation-modal compact-modal" onMouseDown={(event) => event.stopPropagation()}>
         <header>
           <div>
@@ -240,18 +256,23 @@ export function RenameBookModal({
 }
 
 export function DeleteBookModal({
+  closing,
   book,
   busy,
   onClose,
   onConfirm,
 }: {
+  closing: boolean;
   book: BookSummary;
   busy: boolean;
   onClose: () => void;
   onConfirm: () => void;
 }) {
   return (
-    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <div
+      className={`modal-backdrop ${closing ? "is-closing" : ""}`}
+      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+    >
       <section className="annotation-modal compact-modal" onMouseDown={(event) => event.stopPropagation()}>
         <header>
           <div>
@@ -280,9 +301,20 @@ export function DeleteBookModal({
   );
 }
 
-export function SyncReportModal({ report, onClose }: { report: FolderSyncReport; onClose: () => void }) {
+export function SyncReportModal({
+  closing,
+  report,
+  onClose,
+}: {
+  closing: boolean;
+  report: FolderSyncReport;
+  onClose: () => void;
+}) {
   return (
-    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <div
+      className={`modal-backdrop ${closing ? "is-closing" : ""}`}
+      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+    >
       <section className="annotation-modal export-modal" onMouseDown={(event) => event.stopPropagation()}>
         <header>
           <div>
@@ -320,6 +352,132 @@ export function SyncReportModal({ report, onClose }: { report: FolderSyncReport;
         <div className="modal-actions">
           <button className="primary-button" onClick={onClose}>
             完成
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+export function ImportBookModal({
+  closing,
+  preview,
+  bookName,
+  selectedFilePaths,
+  busy,
+  onBookNameChange,
+  onSelectionChange,
+  onClose,
+  onImport,
+}: {
+  closing: boolean;
+  preview: ImportBookPreview;
+  bookName: string;
+  selectedFilePaths: string[];
+  busy: boolean;
+  onBookNameChange: (name: string) => void;
+  onSelectionChange: (paths: string[]) => void;
+  onClose: () => void;
+  onImport: () => void;
+}) {
+  const selectedSet = useMemo(() => new Set(selectedFilePaths), [selectedFilePaths]);
+  const tree = useMemo(() => buildImportTree(preview.files), [preview.files]);
+  const selectedCount = preview.files.filter((file) => selectedSet.has(file.path)).length;
+
+  const normalizeSelection = (nextSet: Set<string>) =>
+    preview.files.filter((file) => nextSet.has(file.path)).map((file) => file.path);
+
+  const toggleFile = (path: string, checked: boolean) => {
+    const nextSet = new Set(selectedSet);
+    if (checked) {
+      nextSet.add(path);
+    } else {
+      nextSet.delete(path);
+    }
+    onSelectionChange(normalizeSelection(nextSet));
+  };
+
+  const toggleGroup = (paths: string[], checked: boolean) => {
+    const nextSet = new Set(selectedSet);
+    paths.forEach((path) => {
+      if (checked) {
+        nextSet.add(path);
+      } else {
+        nextSet.delete(path);
+      }
+    });
+    onSelectionChange(normalizeSelection(nextSet));
+  };
+
+  return (
+    <div
+      className={`modal-backdrop ${closing ? "is-closing" : ""}`}
+      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+    >
+      <section className="annotation-modal import-book-modal" onMouseDown={(event) => event.stopPropagation()}>
+        <header>
+          <div>
+            <p className="eyebrow">Import</p>
+            <h2>导入书籍</h2>
+          </div>
+          <button className="icon-button" onClick={onClose} title="关闭">
+            <X size={18} />
+          </button>
+        </header>
+
+        <div className="import-book-summary">
+          <label className="modal-field">
+            书籍名称
+            <input
+              value={bookName}
+              onChange={(event) => onBookNameChange(event.target.value)}
+              autoFocus
+            />
+          </label>
+          <div>
+            <small>来源文件夹</small>
+            <strong>{preview.rootPath}</strong>
+          </div>
+        </div>
+
+        <div className="import-tree-toolbar">
+          <span>
+            已选择 <strong>{selectedCount}</strong> / {preview.files.length} 个 Markdown 文件
+          </span>
+          <div>
+            <button onClick={() => onSelectionChange(preview.files.map((file) => file.path))}>
+              <Check size={15} /> 全选
+            </button>
+            <button
+              onClick={() => {
+                const nextSet = new Set(preview.files.map((file) => file.path));
+                selectedFilePaths.forEach((path) => nextSet.delete(path));
+                onSelectionChange(normalizeSelection(nextSet));
+              }}
+            >
+              <RefreshCw size={15} /> 反选
+            </button>
+          </div>
+        </div>
+
+        <div className="import-file-tree" role="tree" aria-label="选择要导入的 Markdown 文件">
+          <ImportTreeRows
+            nodes={tree.children}
+            level={0}
+            selectedSet={selectedSet}
+            onToggleFile={toggleFile}
+            onToggleGroup={toggleGroup}
+          />
+        </div>
+
+        <div className="modal-actions">
+          <button onClick={onClose}>取消</button>
+          <button
+            className="primary-button"
+            onClick={onImport}
+            disabled={busy || selectedCount === 0 || !bookName.trim()}
+          >
+            <Save size={16} /> 导入选中文件
           </button>
         </div>
       </section>
@@ -669,6 +827,153 @@ export function HomeSettingsModal({
       </section>
     </div>
   );
+}
+
+function ImportTreeRows({
+  nodes,
+  level,
+  selectedSet,
+  onToggleFile,
+  onToggleGroup,
+}: {
+  nodes: ImportTreeNode[];
+  level: number;
+  selectedSet: Set<string>;
+  onToggleFile: (path: string, checked: boolean) => void;
+  onToggleGroup: (paths: string[], checked: boolean) => void;
+}) {
+  return (
+    <>
+      {nodes.map((node) => {
+        const isFile = Boolean(node.file);
+        const selectedChildren = node.filePaths.filter((path) => selectedSet.has(path)).length;
+        const checked = isFile
+          ? Boolean(node.file && selectedSet.has(node.file.path))
+          : selectedChildren === node.filePaths.length && node.filePaths.length > 0;
+        const indeterminate = !isFile && selectedChildren > 0 && selectedChildren < node.filePaths.length;
+        return (
+          <div key={node.id} role="treeitem" aria-selected={checked}>
+            <label
+              className={`import-tree-row ${isFile ? "file" : "folder"}`}
+              style={{ paddingLeft: `${12 + level * 18}px` }}
+            >
+              <TreeCheckbox
+                checked={checked}
+                indeterminate={indeterminate}
+                onChange={(nextChecked) =>
+                  node.file
+                    ? onToggleFile(node.file.path, nextChecked)
+                    : onToggleGroup(node.filePaths, nextChecked)
+                }
+              />
+              {isFile ? <FileText size={15} /> : <FolderOpen size={15} />}
+              <span>
+                <strong>{node.name}</strong>
+                {node.file ? (
+                  <small>{formatBytes(node.file.size)}</small>
+                ) : (
+                  <small>{node.filePaths.length} 个 Markdown 文件</small>
+                )}
+              </span>
+            </label>
+            {!isFile && node.children.length > 0 && (
+              <ImportTreeRows
+                nodes={node.children}
+                level={level + 1}
+                selectedSet={selectedSet}
+                onToggleFile={onToggleFile}
+                onToggleGroup={onToggleGroup}
+              />
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+function TreeCheckbox({
+  checked,
+  indeterminate,
+  onChange,
+}: {
+  checked: boolean;
+  indeterminate: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  const ref = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.indeterminate = indeterminate;
+    }
+  }, [indeterminate]);
+
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={checked}
+      onChange={(event) => onChange(event.currentTarget.checked)}
+    />
+  );
+}
+
+function buildImportTree(files: ImportPreviewFile[]): ImportTreeNode {
+  const root: ImportTreeNode = {
+    id: "root",
+    name: "root",
+    children: [],
+    filePaths: files.map((file) => file.path),
+  };
+
+  for (const file of files) {
+    const parts = file.relativePath.split(/[\\/]+/).filter(Boolean);
+    let current = root;
+    parts.forEach((part, index) => {
+      const isLeaf = index === parts.length - 1;
+      if (isLeaf) {
+        current.children.push({
+          id: file.path,
+          name: part || file.name,
+          file,
+          children: [],
+          filePaths: [file.path],
+        });
+        return;
+      }
+      let next = current.children.find((child) => !child.file && child.name === part);
+      if (!next) {
+        next = {
+          id: `${current.id}/${part}`,
+          name: part,
+          children: [],
+          filePaths: [],
+        };
+        current.children.push(next);
+      }
+      next.filePaths.push(file.path);
+      current = next;
+    });
+  }
+
+  sortImportTree(root);
+  return root;
+}
+
+function sortImportTree(node: ImportTreeNode) {
+  node.children.sort((left, right) => {
+    if (left.file && !right.file) return 1;
+    if (!left.file && right.file) return -1;
+    return left.name.localeCompare(right.name, "zh-Hans-CN");
+  });
+  node.children.forEach(sortImportTree);
+}
+
+function formatBytes(value: number) {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function formatShortcutFromEvent(event: ReactKeyboardEvent) {
@@ -1113,18 +1418,23 @@ export function SearchModal({
 }
 
 export function BatchExportModal({
+  closing,
   text,
   copied,
   onCopy,
   onClose,
 }: {
+  closing: boolean;
   text: string;
   copied: boolean;
   onCopy: () => void;
   onClose: () => void;
 }) {
   return (
-    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <div
+      className={`modal-backdrop ${closing ? "is-closing" : ""}`}
+      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+    >
       <section className="annotation-modal export-modal" onMouseDown={(event) => event.stopPropagation()}>
         <header>
           <div>
@@ -1215,10 +1525,12 @@ export function NoteDetailModal({
 }
 
 export function VersionManagerModal({
+  closing,
   book,
   onClose,
   onError,
 }: {
+  closing: boolean;
   book: BookSummary;
   onClose: () => void;
   onError: (message: string) => void;
@@ -1231,6 +1543,13 @@ export function VersionManagerModal({
   const [diffResult, setDiffResult] = useState<VersionDiffResult | null>(null);
   const [diffBusy, setDiffBusy] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [dragChapterId, setDragChapterId] = useState<string | null>(null);
+  const [sidebarWidth, setSidebarWidth] = useState(260);
+  const [sidebarResizing, setSidebarResizing] = useState(false);
+  const managerRef = useRef<HTMLDivElement | null>(null);
+  const chaptersRef = useRef<Chapter[]>([]);
+  const dragChapterIdRef = useRef<string | null>(null);
+  const orderDirtyRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -1279,9 +1598,139 @@ export function VersionManagerModal({
     };
   }, [selectedChapterId, onError]);
 
+  useEffect(() => {
+    chaptersRef.current = chapters;
+  }, [chapters]);
+
+  useEffect(() => {
+    dragChapterIdRef.current = dragChapterId;
+  }, [dragChapterId]);
+
   const selectedChapter = chapters.find((chapter) => chapter.id === selectedChapterId);
   const diffBaseVersion = versions.find((version) => version.id === diffBaseVersionId) ?? null;
   const diffTargetVersion = versions.find((version) => version.id === diffTargetVersionId) ?? null;
+  const managerStyle = { "--version-sidebar-width": `${sidebarWidth}px` } as CSSProperties;
+
+  function clampSidebarWidth(width: number) {
+    const manager = managerRef.current;
+    if (!manager) return width;
+    const rect = manager.getBoundingClientRect();
+    const maxWidth = rect.width * 0.4;
+    const minWidth = Math.min(220, maxWidth);
+    return Math.round(Math.min(Math.max(width, minWidth), maxWidth));
+  }
+
+  function startSidebarResize(event: ReactPointerEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    setSidebarResizing(true);
+  }
+
+  useEffect(() => {
+    const handleResize = () => {
+      setSidebarWidth((current) => clampSidebarWidth(current));
+    };
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  useEffect(() => {
+    if (!sidebarResizing) return;
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const manager = managerRef.current;
+      if (!manager) return;
+      event.preventDefault();
+      const rect = manager.getBoundingClientRect();
+      setSidebarWidth(clampSidebarWidth(event.clientX - rect.left));
+    };
+
+    const handlePointerEnd = () => {
+      setSidebarResizing(false);
+    };
+
+    document.body.classList.add("version-sidebar-resize-active");
+    window.addEventListener("pointermove", handlePointerMove, { passive: false });
+    window.addEventListener("pointerup", handlePointerEnd);
+    window.addEventListener("pointercancel", handlePointerEnd);
+
+    return () => {
+      document.body.classList.remove("version-sidebar-resize-active");
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerEnd);
+      window.removeEventListener("pointercancel", handlePointerEnd);
+    };
+  }, [sidebarResizing]);
+
+  function moveChapterOrder(targetChapterId: string, movedChapterId?: string | null) {
+    if (!movedChapterId || movedChapterId === targetChapterId) return;
+    const current = chaptersRef.current;
+    const from = current.findIndex((chapter) => chapter.id === movedChapterId);
+    const to = current.findIndex((chapter) => chapter.id === targetChapterId);
+    if (from < 0 || to < 0) return;
+
+    const next = [...current];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    chaptersRef.current = next;
+    orderDirtyRef.current = true;
+    setChapters(next);
+  }
+
+  async function saveChapterOrder(nextChapters: Chapter[]) {
+    if (nextChapters.length === 0) return;
+    setBusy(true);
+    try {
+      const saved = await reorderChapters(
+        book.id,
+        nextChapters.map((chapter) => chapter.id),
+      );
+      chaptersRef.current = saved;
+      setChapters(saved);
+    } catch (err) {
+      onError(readError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!dragChapterId) return;
+
+    const handlePointerMove = (event: PointerEvent) => {
+      event.preventDefault();
+      const element = document.elementFromPoint(event.clientX, event.clientY);
+      const row = element?.closest<HTMLElement>("[data-version-chapter-id]");
+      const targetChapterId = row?.dataset.versionChapterId;
+      if (targetChapterId) {
+        moveChapterOrder(targetChapterId, dragChapterIdRef.current);
+      }
+    };
+
+    const handlePointerEnd = () => {
+      const shouldSave = orderDirtyRef.current;
+      const nextChapters = chaptersRef.current;
+      dragChapterIdRef.current = null;
+      orderDirtyRef.current = false;
+      setDragChapterId(null);
+      if (shouldSave) {
+        void saveChapterOrder(nextChapters);
+      }
+    };
+
+    document.body.classList.add("sorting-drag-active");
+    window.addEventListener("pointermove", handlePointerMove, { passive: false });
+    window.addEventListener("pointerup", handlePointerEnd);
+    window.addEventListener("pointercancel", handlePointerEnd);
+
+    return () => {
+      document.body.classList.remove("sorting-drag-active");
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerEnd);
+      window.removeEventListener("pointercancel", handlePointerEnd);
+    };
+  }, [dragChapterId]);
 
   async function saveLabel(version: ChapterVersion, label: string) {
     setBusy(true);
@@ -1334,7 +1783,10 @@ export function VersionManagerModal({
   }
 
   return (
-    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <div
+      className={`modal-backdrop ${closing ? "is-closing" : ""}`}
+      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+    >
       <section className="annotation-modal version-modal" onMouseDown={(event) => event.stopPropagation()}>
         <header>
           <div>
@@ -1345,18 +1797,43 @@ export function VersionManagerModal({
             <X size={18} />
           </button>
         </header>
-        <div className="version-manager">
+        <div
+          ref={managerRef}
+          className={`version-manager ${sidebarResizing ? "is-resizing" : ""}`}
+          style={managerStyle}
+        >
           <aside>
-            {chapters.map((chapter) => (
+            {chapters.map((chapter, index) => (
               <button
                 key={chapter.id}
-                className={chapter.id === selectedChapterId ? "active" : ""}
+                data-version-chapter-id={chapter.id}
+                className={`version-chapter-row ${chapter.id === selectedChapterId ? "active" : ""} ${
+                  chapter.id === dragChapterId ? "dragging" : ""
+                }`}
                 onClick={() => setSelectedChapterId(chapter.id)}
+                onPointerDown={(event) => {
+                  if (event.button !== 0 || busy) return;
+                  event.preventDefault();
+                  dragChapterIdRef.current = chapter.id;
+                  setSelectedChapterId(chapter.id);
+                  setDragChapterId(chapter.id);
+                }}
               >
-                {chapterFileName(chapter)}
+                <span className="version-chapter-index">{String(index + 1).padStart(2, "0")}</span>
+                <GripVertical size={15} />
+                <span>{chapterFileName(chapter)}</span>
               </button>
             ))}
           </aside>
+          <button
+            type="button"
+            className="version-resizer"
+            role="separator"
+            aria-label="调整章节列表宽度"
+            aria-orientation="vertical"
+            aria-valuenow={sidebarWidth}
+            onPointerDown={startSidebarResize}
+          />
           <section>
             <div className="version-heading">
               <strong>{selectedChapter ? chapterFileName(selectedChapter) : "选择章节"}</strong>

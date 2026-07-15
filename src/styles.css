@@ -2899,14 +2899,22 @@ button:disabled {
 }
 
 .book-collection {
+  position: relative;
   display: grid;
   gap: 14px;
   padding-bottom: 60px;
   animation: surface-enter 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: background 160ms ease, box-shadow 160ms ease;
 }
 
 .book-collection.grid {
   grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+}
+
+.book-collection.grid.is-import-drag-active {
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--drop-bg) 72%, transparent);
+  box-shadow: inset 0 0 0 1px var(--drop-border);
 }
 
 .book-card {
@@ -4340,6 +4348,144 @@ body.sorting-drag-active * {
   width: min(520px, calc(100vw - 44px));
 }
 
+.import-book-modal {
+  width: min(860px, calc(100vw - 44px));
+}
+
+.import-book-summary {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.75fr) minmax(0, 1.25fr);
+  gap: 14px;
+  align-items: end;
+  margin-top: 14px;
+}
+
+.import-book-summary .modal-field {
+  margin-top: 0;
+}
+
+.import-book-summary > div {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--paper-strong) 74%, transparent);
+  padding: 10px 12px;
+}
+
+.import-book-summary small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.import-book-summary strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 720;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-tree-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--paper-strong) 76%, var(--accent) 4%);
+  color: var(--muted);
+  padding: 10px 12px;
+}
+
+.import-tree-toolbar > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.import-tree-toolbar button {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--button-border);
+  border-radius: 8px;
+  background: var(--button-bg);
+  color: var(--button-ink);
+  cursor: pointer;
+  padding: 0 10px;
+}
+
+.import-file-tree {
+  max-height: min(420px, calc(100vh - 430px));
+  min-height: 220px;
+  margin-top: 10px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--paper-strong) 72%, transparent), transparent),
+    color-mix(in srgb, var(--paper) 90%, var(--shell-bg));
+  padding: 8px;
+}
+
+.import-tree-row {
+  display: grid;
+  grid-template-columns: 18px 18px minmax(0, 1fr);
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+  border-radius: 7px;
+  color: var(--ink);
+  cursor: pointer;
+  padding-block: 5px;
+}
+
+.import-tree-row:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.import-tree-row input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+}
+
+.import-tree-row svg {
+  color: color-mix(in srgb, var(--accent) 72%, var(--muted));
+}
+
+.import-tree-row.file svg {
+  color: var(--muted);
+}
+
+.import-tree-row span {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.import-tree-row strong {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 730;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-tree-row small {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .note-detail-modal {
   width: min(720px, calc(100vw - 44px));
 }
@@ -4931,18 +5077,24 @@ body.sorting-drag-active * {
 
 .version-modal {
   width: min(1180px, calc(100vw - 44px));
+  height: min(760px, calc(100vh - var(--titlebar-height) - 44px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .version-manager {
   display: grid;
-  grid-template-columns: 250px minmax(0, 1fr);
-  gap: 14px;
+  grid-template-columns: var(--version-sidebar-width, 260px) 10px minmax(0, 1fr);
+  gap: 8px;
+  flex: 1 1 auto;
+  min-height: 0;
   margin-top: 18px;
 }
 
 .version-manager aside,
 .version-manager section {
-  min-height: 360px;
+  min-height: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: color-mix(in srgb, var(--paper-strong) 78%, transparent);
@@ -4950,24 +5102,113 @@ body.sorting-drag-active * {
 }
 
 .version-manager aside {
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-color: var(--scroll-thumb) var(--scroll-track);
+  scrollbar-width: thin;
+}
+
+.version-manager section {
   overflow: auto;
+  scrollbar-color: var(--scroll-thumb) var(--scroll-track);
+  scrollbar-width: thin;
+}
+
+.version-resizer {
+  align-self: stretch;
+  width: 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: col-resize;
+  padding: 0;
+  position: relative;
+  touch-action: none;
+}
+
+.version-resizer::before {
+  content: "";
+  position: absolute;
+  inset: 12px 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--line) 82%, var(--accent) 18%);
+  transition: background 140ms ease, inset 140ms ease, box-shadow 140ms ease;
+}
+
+.version-resizer:hover::before,
+.version-manager.is-resizing .version-resizer::before {
+  inset: 10px 3px;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .version-manager aside button {
+  display: grid;
+  grid-template-columns: 34px 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
   width: 100%;
-  min-height: 34px;
+  min-height: 44px;
   border-radius: 7px;
   background: transparent;
   color: var(--ink);
-  cursor: pointer;
-  padding: 0 9px;
+  cursor: grab;
+  margin: 4px 0;
+  padding: 9px 10px;
   text-align: left;
+  touch-action: none;
+  user-select: none;
+}
+
+.version-manager aside button span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.version-chapter-index {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.version-manager aside button svg {
+  color: var(--muted);
 }
 
 .version-manager aside button.active,
 .version-manager aside button:hover {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   color: var(--accent);
+}
+
+.version-manager aside button.dragging {
+  border-color: var(--accent);
+  opacity: 0.62;
+}
+
+.version-manager aside::-webkit-scrollbar,
+.version-manager section::-webkit-scrollbar {
+  width: 10px;
+}
+
+.version-manager aside::-webkit-scrollbar-track,
+.version-manager section::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: var(--scroll-track);
+}
+
+.version-manager aside::-webkit-scrollbar-thumb,
+.version-manager section::-webkit-scrollbar-thumb {
+  border: 2px solid var(--scroll-track);
+  border-radius: 999px;
+  background: var(--scroll-thumb);
+}
+
+body.version-sidebar-resize-active,
+body.version-sidebar-resize-active * {
+  cursor: col-resize !important;
+  user-select: none;
 }
 
 .version-heading,
@@ -5219,6 +5460,34 @@ body.sorting-drag-active * {
 @keyframes fade-out {
   from { opacity: 1; }
   to { opacity: 0; }
+}
+
+@keyframes top-notice-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+}
+
+@keyframes top-notice-out {
+  from {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, -8px) scale(0.985);
+  }
+}
+
+@keyframes notice-ring-countdown {
+  to {
+    stroke-dashoffset: 43.98;
+  }
 }
 
 @keyframes modal-rise {
@@ -5555,6 +5824,12 @@ body.sorting-drag-active * {
   color: var(--ink);
   padding: 10px 12px;
   backdrop-filter: blur(18px) saturate(118%);
+  animation: top-notice-in 170ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.top-notice.is-closing {
+  animation: top-notice-out 150ms ease-in forwards;
+  pointer-events: none;
 }
 
 .top-notice span {
@@ -5569,6 +5844,32 @@ body.sorting-drag-active * {
   color: var(--ink);
 }
 
+.notice-ring {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  color: var(--accent);
+  transform: rotate(-90deg);
+}
+
+.notice-ring-track,
+.notice-ring-progress {
+  fill: none;
+  stroke-width: 2;
+}
+
+.notice-ring-track {
+  stroke: color-mix(in srgb, var(--accent) 18%, var(--line));
+}
+
+.notice-ring-progress {
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-dasharray: 43.98;
+  stroke-dashoffset: 0;
+  animation: notice-ring-countdown 2000ms linear forwards;
+}
+
 .top-notice.error {
   border-color: color-mix(in srgb, #d84b3f 48%, var(--line));
   background:
@@ -5579,6 +5880,10 @@ body.sorting-drag-active * {
 
 .top-notice.error .icon-button {
   border-color: color-mix(in srgb, #d84b3f 34%, var(--line));
+}
+
+.top-notice.error .notice-ring {
+  color: #d84b3f;
 }
 
 .selection-menu {

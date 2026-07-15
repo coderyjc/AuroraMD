@@ -37,7 +37,7 @@ import {
   exportBackup,
   getLatestReadingProgress,
   getSettings,
-  importBookFolder,
+  importBookSelection,
   listBooks,
   listChapters,
   listExportPresets,
@@ -45,6 +45,7 @@ import {
   markAnnotationsStatus,
   openBookFolder,
   pickBookFolder,
+  previewImportBookFolder,
   readChapter,
   readChapterVersion,
   reorderChapters,
@@ -64,6 +65,7 @@ import {
   type BookMenuState,
   DeleteBookModal,
   HomeSettingsModal,
+  ImportBookModal,
   NoteDetailModal,
   RenameBookModal,
   type RenameBookState,
@@ -107,6 +109,7 @@ import type {
   ExportTaskGoal,
   ExportTemplate,
   FolderSyncReport,
+  ImportBookPreview,
   NoteItem,
   ReadChapterResponse,
   ShortcutAction,
@@ -136,7 +139,7 @@ type ViewTransitionDocument = Document & {
 
 const uiExitMs = 150;
 const readerMotionMs = 220;
-const noticeAutoDismissMs = 3000;
+const noticeAutoDismissMs = 2000;
 
 function AppTitlebar({ title, subtitle }: { title: string; subtitle: string }) {
   function handleDrag(event: ReactMouseEvent<HTMLDivElement>) {
@@ -192,6 +195,13 @@ function AppTitlebar({ title, subtitle }: { title: string; subtitle: string }) {
   );
 }
 
+function deriveImportBookName(preview: ImportBookPreview, filePaths: string[]) {
+  if (filePaths.length === 1) {
+    return preview.files.find((file) => file.path === filePaths[0])?.name ?? preview.defaultName;
+  }
+  return preview.defaultName;
+}
+
 export default function App() {
   const [books, setBooks] = useState<BookSummary[]>([]);
   const [homeView, setHomeView] = useState<"grid" | "notes">("grid");
@@ -205,6 +215,11 @@ export default function App() {
   const [workbenchChapters, setWorkbenchChapters] = useState<Chapter[]>([]);
   const [workbenchNoteDetail, setWorkbenchNoteDetail] = useState<NoteItem | null>(null);
   const [importDragActive, setImportDragActive] = useState(false);
+  const [importPreview, setImportPreview] = useState<ImportBookPreview | null>(null);
+  const [importBookName, setImportBookName] = useState("");
+  const [importBookNameEdited, setImportBookNameEdited] = useState(false);
+  const [selectedImportFilePaths, setSelectedImportFilePaths] = useState<string[]>([]);
+  const [importModalClosing, setImportModalClosing] = useState(false);
   const [activeBook, setActiveBook] = useState<ReaderBook | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [reader, setReader] = useState<ReadChapterResponse | null>(null);
@@ -219,10 +234,15 @@ export default function App() {
   const [bookMenu, setBookMenu] = useState<BookMenuState | null>(null);
   const [bookMenuClosing, setBookMenuClosing] = useState(false);
   const [renameBookDraft, setRenameBookDraft] = useState<RenameBookState | null>(null);
+  const [renameBookClosing, setRenameBookClosing] = useState(false);
   const [deleteBookDraft, setDeleteBookDraft] = useState<BookSummary | null>(null);
+  const [deleteBookClosing, setDeleteBookClosing] = useState(false);
   const [syncReport, setSyncReport] = useState<FolderSyncReport | null>(null);
+  const [syncReportClosing, setSyncReportClosing] = useState(false);
   const [versionManagerBook, setVersionManagerBook] = useState<BookSummary | null>(null);
+  const [versionManagerClosing, setVersionManagerClosing] = useState(false);
   const [batchExportOpen, setBatchExportOpen] = useState(false);
+  const [batchExportClosing, setBatchExportClosing] = useState(false);
   const [batchExportText, setBatchExportText] = useState("");
   const [draft, setDraft] = useState<SelectionDraft | null>(null);
   const [pendingDraft, setPendingDraft] = useState<SelectionDraft | null>(null);
@@ -237,6 +257,7 @@ export default function App() {
     (SearchHighlight & { chapterVersionId: string }) | null
   >(null);
   const [sortOpen, setSortOpen] = useState(false);
+  const [sortClosing, setSortClosing] = useState(false);
   const [sortDraft, setSortDraft] = useState<Chapter[]>([]);
   const [sortDragChapterId, setSortDragChapterId] = useState<string | null>(null);
   const [isLeftCollapsed, setIsLeftCollapsed] = useState(false);
@@ -260,9 +281,11 @@ export default function App() {
   const [exportScope, setExportScope] = useState<"chapter" | "book">("chapter");
   const [exportText, setExportText] = useState("");
   const [copied, setCopied] = useState(false);
+  const [draftClosing, setDraftClosing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [topNoticeClosing, setTopNoticeClosing] = useState(false);
   const [pendingScroll, setPendingScroll] = useState<number | null>(null);
   const [noteDetailClosing, setNoteDetailClosing] = useState(false);
 
@@ -271,7 +294,7 @@ export default function App() {
   const readerLeftRef = useRef<HTMLElement | null>(null);
   const readerRightRef = useRef<HTMLElement | null>(null);
   const readerSearchInputRef = useRef<HTMLInputElement | null>(null);
-  const importDropRef = useRef<HTMLButtonElement | null>(null);
+  const bookCollectionRef = useRef<HTMLElement | null>(null);
   const readerMotionTimerRef = useRef<number | null>(null);
   const latestSettingsRef = useRef<AppSettings>(defaultSettings);
   const searchThemeSnapshotRef = useRef<Pick<AppSettings, "themeSeries" | "theme"> | null>(null);
@@ -291,10 +314,21 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!notice) return;
-    const timeout = window.setTimeout(() => setNotice(""), noticeAutoDismissMs);
-    return () => window.clearTimeout(timeout);
-  }, [notice]);
+    if (!notice && !error) return;
+    setTopNoticeClosing(false);
+    const closeTimer = window.setTimeout(() => {
+      setTopNoticeClosing(true);
+    }, noticeAutoDismissMs);
+    const clearTimer = window.setTimeout(() => {
+      setError("");
+      setNotice("");
+      setTopNoticeClosing(false);
+    }, noticeAutoDismissMs + uiExitMs);
+    return () => {
+      window.clearTimeout(closeTimer);
+      window.clearTimeout(clearTimer);
+    };
+  }, [notice, error]);
 
   useEffect(() => {
     if (activeBook) {
@@ -603,6 +637,7 @@ export default function App() {
     deleteBookDraft,
     renameBookDraft,
     bookMenu,
+    importPreview,
   ]);
 
   const readerStyle = useMemo(
@@ -665,7 +700,7 @@ export default function App() {
     try {
       const selected = await pickBookFolder();
       if (selected) {
-        await importAndOpen(selected);
+        await openImportPreview(selected);
       }
     } catch (err) {
       setError(readError(err));
@@ -680,7 +715,7 @@ export default function App() {
     setError("");
     setBusy(true);
     try {
-      await importAndOpen(folderPath);
+      await openImportPreview(folderPath);
     } catch (err) {
       setError(readError(err));
     } finally {
@@ -689,23 +724,55 @@ export default function App() {
   }
 
   function isImportDropPosition(position: { x: number; y: number }) {
-    const dropZone = importDropRef.current;
-    if (!dropZone) return false;
-    const rect = dropZone.getBoundingClientRect();
+    const shelf = bookCollectionRef.current;
+    if (!shelf) return false;
+    const rect = shelf.getBoundingClientRect();
     const scale = window.devicePixelRatio || 1;
     const x = position.x / scale;
     const y = position.y / scale;
     return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
   }
 
-  async function importAndOpen(path: string) {
-    const imported = await importBookFolder(path);
-    await refreshBooks();
-    await openBook({
-      ...imported.book,
-      chapterCount: imported.chapters.length,
-      annotationCount: 0,
-    });
+  async function openImportPreview(path: string) {
+    const preview = await previewImportBookFolder(path);
+    const initialFilePaths = preview.files.map((file) => file.path);
+    setImportPreview(preview);
+    setImportBookNameEdited(false);
+    setImportBookName(deriveImportBookName(preview, initialFilePaths));
+    setSelectedImportFilePaths(initialFilePaths);
+    setImportModalClosing(false);
+  }
+
+  function updateImportBookName(name: string) {
+    setImportBookNameEdited(true);
+    setImportBookName(name);
+  }
+
+  function updateImportFileSelection(filePaths: string[]) {
+    setSelectedImportFilePaths(filePaths);
+    if (!importBookNameEdited && importPreview) {
+      setImportBookName(deriveImportBookName(importPreview, filePaths));
+    }
+  }
+
+  async function confirmImportBook() {
+    if (!importPreview) return;
+    setError("");
+    setBusy(true);
+    try {
+      const imported = await importBookSelection({
+        rootPath: importPreview.rootPath,
+        bookName: importBookName.trim(),
+        filePaths: selectedImportFilePaths,
+      });
+      await refreshBooks();
+      setNotice(`已导入《${imported.book.name}》，共 ${imported.chapters.length} 个章节。`);
+      closeImportModal();
+    } catch (err) {
+      setError(readError(err));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function openBook(book: ReaderBook) {
@@ -943,6 +1010,7 @@ export default function App() {
 
   function openPendingDraft() {
     if (!pendingDraft) return;
+    setDraftClosing(false);
     setDraft(pendingDraft);
     closeSelectionContextMenu();
   }
@@ -978,10 +1046,9 @@ export default function App() {
         ...reader,
         annotations: sortReaderAnnotations([...reader.annotations, annotation]),
       });
-      setDraft(null);
       setPendingDraft(null);
+      closeDraftModal();
       closeSelectionContextMenu();
-      window.getSelection()?.removeAllRanges();
       void refreshNotes();
     } catch (err) {
       setError(readError(err));
@@ -1072,6 +1139,7 @@ export default function App() {
   function openSortModal() {
     setSortDraft(chapters);
     setSortDragChapterId(null);
+    setSortClosing(false);
     setSortOpen(true);
   }
 
@@ -1099,8 +1167,7 @@ export default function App() {
         sortDraft.map((chapter) => chapter.id),
       );
       setChapters(saved);
-      setSortOpen(false);
-      setSortDragChapterId(null);
+      closeSortModal();
     } catch (err) {
       setError(readError(err));
     } finally {
@@ -1318,7 +1385,7 @@ export default function App() {
     setError("");
     try {
       await updateBookName(renameBookDraft.book.id, renameBookDraft.name);
-      setRenameBookDraft(null);
+      closeRenameBookModal();
       await refreshBooks();
       setNotice("书籍名称已更新。");
     } catch (err) {
@@ -1364,7 +1431,7 @@ export default function App() {
     setError("");
     try {
       await deleteBook(deletedBook.id);
-      setDeleteBookDraft(null);
+      closeDeleteBookModal();
       if (workbenchBookId === deletedBook.id) {
         setWorkbenchBookId("all");
         setWorkbenchChapterId("all");
@@ -1385,6 +1452,7 @@ export default function App() {
     closeBookMenu();
     try {
       const report = await syncBookFolder(book.id);
+      setSyncReportClosing(false);
       setSyncReport(report);
       await refreshBooks();
       void refreshNotes();
@@ -1435,6 +1503,7 @@ export default function App() {
         exportTaskGoal,
       );
       setBatchExportText(markdown);
+      setBatchExportClosing(false);
       setBatchExportOpen(true);
       await markAnnotationsStatus(selectedNoteIds, "exported");
       await refreshNotes();
@@ -1563,6 +1632,65 @@ export default function App() {
     setWorkbenchNoteDetail(note);
   }
 
+  function closeImportModal() {
+    if (!importPreview) return;
+    animateClose(setImportModalClosing, () => {
+      setImportPreview(null);
+      setImportBookName("");
+      setImportBookNameEdited(false);
+      setSelectedImportFilePaths([]);
+    });
+  }
+
+  function closeRenameBookModal() {
+    if (!renameBookDraft) return;
+    animateClose(setRenameBookClosing, () => setRenameBookDraft(null));
+  }
+
+  function closeDeleteBookModal() {
+    if (!deleteBookDraft) return;
+    animateClose(setDeleteBookClosing, () => setDeleteBookDraft(null));
+  }
+
+  function closeSyncReportModal() {
+    if (!syncReport) return;
+    animateClose(setSyncReportClosing, () => setSyncReport(null));
+  }
+
+  function closeVersionManagerModal() {
+    if (!versionManagerBook) return;
+    animateClose(setVersionManagerClosing, () => setVersionManagerBook(null));
+  }
+
+  function closeBatchExportModal() {
+    if (!batchExportOpen) return;
+    animateClose(setBatchExportClosing, () => setBatchExportOpen(false));
+  }
+
+  function closeSortModal() {
+    if (!sortOpen) return;
+    animateClose(setSortClosing, () => {
+      setSortOpen(false);
+      setSortDragChapterId(null);
+    });
+  }
+
+  function closeDraftModal() {
+    if (!draft) return;
+    animateClose(setDraftClosing, () => {
+      setDraft(null);
+      window.getSelection()?.removeAllRanges();
+    });
+  }
+
+  function closeTopNotice() {
+    if (!notice && !error) return;
+    animateClose(setTopNoticeClosing, () => {
+      setError("");
+      setNotice("");
+    });
+  }
+
   function closeBookMenu() {
     if (!bookMenu) return;
     animateClose(setBookMenuClosing, () => setBookMenu(null));
@@ -1590,8 +1718,7 @@ export default function App() {
         return true;
       }
       if (draft) {
-        setDraft(null);
-        window.getSelection()?.removeAllRanges();
+        closeDraftModal();
         return true;
       }
       if (annotationMenu) {
@@ -1615,15 +1742,18 @@ export default function App() {
         return true;
       }
       if (sortOpen) {
-        setSortOpen(false);
-        setSortDragChapterId(null);
+        closeSortModal();
         return true;
       }
       return false;
     }
 
     if (batchExportOpen) {
-      setBatchExportOpen(false);
+      closeBatchExportModal();
+      return true;
+    }
+    if (importPreview) {
+      closeImportModal();
       return true;
     }
     if (searchOpen) {
@@ -1639,19 +1769,19 @@ export default function App() {
       return true;
     }
     if (versionManagerBook) {
-      setVersionManagerBook(null);
+      closeVersionManagerModal();
       return true;
     }
     if (syncReport) {
-      setSyncReport(null);
+      closeSyncReportModal();
       return true;
     }
     if (deleteBookDraft) {
-      setDeleteBookDraft(null);
+      closeDeleteBookModal();
       return true;
     }
     if (renameBookDraft) {
-      setRenameBookDraft(null);
+      closeRenameBookModal();
       return true;
     }
     if (bookMenu) {
@@ -1776,6 +1906,7 @@ export default function App() {
       const nextDraft = pendingDraft ?? buildDraftFromSelection(true);
       if (nextDraft) {
         setPendingDraft(nextDraft);
+        setDraftClosing(false);
         setDraft(nextDraft);
       }
       return;
@@ -1802,10 +1933,7 @@ export default function App() {
         onContextMenu={suppressNativeContextMenu}
       >
         <AppTitlebar title="Loop Book" subtitle="首页" />
-        <TopNotice error={error} notice={notice} onClose={() => {
-          setError("");
-          setNotice("");
-        }} />
+        <TopNotice error={error} notice={notice} closing={topNoticeClosing} onClose={closeTopNotice} />
         <header className="home-header">
           <div>
             <p className="eyebrow">Local Markdown Annotation Studio</p>
@@ -1870,7 +1998,10 @@ export default function App() {
             onMarkStatus={(status) => void updateSelectedNoteStatus(status)}
           />
         ) : (
-          <main className={`book-collection ${homeView}`}>
+          <main
+            ref={bookCollectionRef}
+            className={`book-collection ${homeView} ${importDragActive ? "is-import-drag-active" : ""}`}
+          >
             {books.map((book) => (
               <button
                 key={book.id}
@@ -1884,7 +2015,6 @@ export default function App() {
               </button>
             ))}
             <button
-              ref={importDropRef}
               type="button"
               className={`book-card import-book-card ${importDragActive ? "drag-active" : ""}`}
               onClick={handleChooseFolder}
@@ -1906,43 +2036,68 @@ export default function App() {
             closing={bookMenuClosing}
             onTogglePinned={() => void toggleBookPinned(bookMenu.book)}
             onRename={() => {
+              setRenameBookClosing(false);
               setRenameBookDraft({ book: bookMenu.book, name: bookMenu.book.name });
               closeBookMenu();
             }}
             onOpenFolder={() => void openBookInExplorer(bookMenu.book)}
             onSync={() => void syncBook(bookMenu.book)}
             onVersions={() => {
+              setVersionManagerClosing(false);
               setVersionManagerBook(bookMenu.book);
               closeBookMenu();
             }}
             onDelete={() => {
+              setDeleteBookClosing(false);
               setDeleteBookDraft(bookMenu.book);
               closeBookMenu();
             }}
           />
         )}
+        {importPreview && (
+          <ImportBookModal
+            closing={importModalClosing}
+            preview={importPreview}
+            bookName={importBookName}
+            selectedFilePaths={selectedImportFilePaths}
+            busy={busy}
+            onBookNameChange={updateImportBookName}
+            onSelectionChange={updateImportFileSelection}
+            onClose={closeImportModal}
+            onImport={() => void confirmImportBook()}
+          />
+        )}
         {renameBookDraft && (
           <RenameBookModal
+            closing={renameBookClosing}
             draft={renameBookDraft}
             busy={busy}
             onChange={(name) => setRenameBookDraft({ ...renameBookDraft, name })}
-            onClose={() => setRenameBookDraft(null)}
+            onClose={closeRenameBookModal}
             onSave={() => void saveBookRename()}
           />
         )}
         {deleteBookDraft && (
           <DeleteBookModal
+            closing={deleteBookClosing}
             book={deleteBookDraft}
             busy={busy}
-            onClose={() => setDeleteBookDraft(null)}
+            onClose={closeDeleteBookModal}
             onConfirm={() => void confirmDeleteBook()}
           />
         )}
-        {syncReport && <SyncReportModal report={syncReport} onClose={() => setSyncReport(null)} />}
+        {syncReport && (
+          <SyncReportModal
+            closing={syncReportClosing}
+            report={syncReport}
+            onClose={closeSyncReportModal}
+          />
+        )}
         {versionManagerBook && (
           <VersionManagerModal
+            closing={versionManagerClosing}
             book={versionManagerBook}
-            onClose={() => setVersionManagerBook(null)}
+            onClose={closeVersionManagerModal}
             onError={setError}
           />
         )}
@@ -1999,10 +2154,11 @@ export default function App() {
         )}
         {batchExportOpen && (
           <BatchExportModal
+            closing={batchExportClosing}
             text={batchExportText}
             copied={copied}
             onCopy={() => void copyBatchExport()}
-            onClose={() => setBatchExportOpen(false)}
+            onClose={closeBatchExportModal}
           />
         )}
       </div>
@@ -2020,10 +2176,7 @@ export default function App() {
       onContextMenu={suppressNativeContextMenu}
     >
       <AppTitlebar title={activeBook.name} subtitle={reader?.chapter.title ?? "阅读器"} />
-      <TopNotice error={error} notice={notice} onClose={() => {
-        setError("");
-        setNotice("");
-      }} />
+      <TopNotice error={error} notice={notice} closing={topNoticeClosing} onClose={closeTopNotice} />
       <aside className="reader-left" ref={readerLeftRef}>
         <div className="reader-bookbar">
           <button className="icon-button" title="返回首页" onClick={() => {
@@ -2272,16 +2425,14 @@ export default function App() {
 
       {sortOpen && (
         <SortChaptersModal
+          closing={sortClosing}
           chapters={sortDraft}
           activeChapterId={reader?.chapter.id}
           dragChapterId={sortDragChapterId}
           busy={busy}
           onDragStart={setSortDragChapterId}
           onMove={moveSortDraft}
-          onClose={() => {
-            setSortOpen(false);
-            setSortDragChapterId(null);
-          }}
+          onClose={closeSortModal}
           onSave={() => void saveSortDraft()}
         />
       )}
@@ -2362,12 +2513,10 @@ export default function App() {
       )}
       {draft && (
         <NewAnnotationModal
+          closing={draftClosing}
           draft={draft}
           onChange={setDraft}
-          onCancel={() => {
-            setDraft(null);
-            window.getSelection()?.removeAllRanges();
-          }}
+          onCancel={closeDraftModal}
           onSave={() => void saveDraft()}
         />
       )}
@@ -2385,8 +2534,85 @@ export default function App() {
 }
 
 function readError(err: unknown) {
-  if (err instanceof Error) return err.message;
-  return String(err);
+  const message = err instanceof Error ? err.message : String(err);
+  return translateErrorMessage(message);
+}
+
+function translateErrorMessage(message: string) {
+  const exactMessages: Record<string, string> = {
+    "Selected path is not a folder.": "选择的路径不是文件夹。",
+    "No Markdown files were found in this folder.": "这个文件夹中没有找到 Markdown 文件。",
+    "Book folder no longer exists.": "书籍文件夹不存在或已被移动。",
+    "Book root folder is missing.": "书籍根文件夹不存在或已被移动。",
+    "Book was not found.": "没有找到这本书。",
+    "Book name cannot be empty.": "书籍名称不能为空。",
+    "Current chapter version cannot be deleted. Switch to or create another current version first.":
+      "当前章节版本不能删除，请先切换或创建另一个当前版本。",
+    "Preset name cannot be empty.": "预设名称不能为空。",
+    "Backup path cannot be the active database file.": "备份路径不能是当前正在使用的数据库文件。",
+    "Database lock is poisoned.": "数据库锁状态异常，请重启应用后再试。",
+    "Unknown annotation status.": "未知的批注状态。",
+    "Unknown export template.": "未知的导出模板。",
+  };
+  if (exactMessages[message]) return exactMessages[message];
+
+  const prefixes: Array<[string, string]> = [
+    ["Failed to open folder picker:", "打开文件夹选择器失败："],
+    ["Folder picker failed:", "文件夹选择器失败："],
+    ["Failed to open backup save dialog:", "打开备份保存窗口失败："],
+    ["Backup save dialog failed:", "备份保存窗口失败："],
+    ["Failed to open backup file dialog:", "打开备份文件窗口失败："],
+    ["Backup file dialog failed:", "备份文件窗口失败："],
+    ["Failed to resolve folder path:", "解析文件夹路径失败："],
+    ["Failed to read book folder:", "读取书籍文件夹失败："],
+    ["Failed to read folder entry:", "读取文件夹条目失败："],
+    ["Failed to resolve chapter path:", "解析章节路径失败："],
+    ["Failed to open folder in Explorer:", "在资源管理器中打开文件夹失败："],
+    ["Failed to open folder:", "打开文件夹失败："],
+    ["Failed to update pinned state:", "更新置顶状态失败："],
+    ["Failed to save chapter order:", "保存章节顺序失败："],
+    ["Failed to update annotation:", "更新批注失败："],
+    ["Failed to update annotation status:", "更新批注状态失败："],
+    ["Failed to save annotation status:", "保存批注状态失败："],
+    ["Failed to update export preset:", "更新导出预设失败："],
+    ["Failed to export backup:", "导出备份失败："],
+    ["Failed to open backup database:", "打开备份数据库失败："],
+    ["Failed to restore backup:", "恢复备份失败："],
+    ["Failed to restore annotation anchors:", "恢复批注锚点失败："],
+    ["Failed to restore focus mode setting:", "恢复聚焦模式设置失败："],
+    ["Failed to restore theme series setting:", "恢复主题系列设置失败："],
+    ["Failed to restore pinned books:", "恢复置顶书籍失败："],
+    ["Failed to restore pinned annotations:", "恢复置顶批注失败："],
+    ["Failed to restore export presets:", "恢复导出预设失败："],
+    ["Failed to update settings:", "更新设置失败："],
+    ["Failed to save reading progress:", "保存阅读进度失败："],
+    ["Failed to start import transaction:", "启动导入事务失败："],
+    ["Failed to create book:", "创建书籍失败："],
+    ["Failed to create chapter:", "创建章节失败："],
+    ["Failed to create chapter version:", "创建章节版本失败："],
+    ["Failed to finish import:", "完成导入失败："],
+    ["Failed to rename book:", "重命名书籍失败："],
+    ["Failed to read ", "读取文件失败："],
+    ["Failed to update renamed chapter:", "更新改名章节失败："],
+    ["Failed to add new chapter:", "添加新章节失败："],
+    ["Failed to add new chapter version:", "添加新章节版本失败："],
+    ["Failed to start version transaction:", "启动版本事务失败："],
+    ["Failed to update current chapter version:", "更新当前章节版本失败："],
+    ["Failed to save new chapter version:", "保存新章节版本失败："],
+    ["Book not found:", "没有找到书籍："],
+    ["Chapter not found:", "没有找到章节："],
+    ["Chapter version not found:", "没有找到章节版本："],
+    ["Chapter snapshot not found:", "没有找到章节快照："],
+    ["Export preset not found:", "没有找到导出预设："],
+    ["Annotation not found:", "没有找到批注："],
+    ["Database error:", "数据库错误："],
+  ];
+  for (const [prefix, translatedPrefix] of prefixes) {
+    if (message.startsWith(prefix)) {
+      return `${translatedPrefix}${message.slice(prefix.length).trimStart()}`;
+    }
+  }
+  return message;
 }
 
 function clamp(value: number, min: number, max: number) {

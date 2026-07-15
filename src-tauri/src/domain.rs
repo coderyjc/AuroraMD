@@ -127,6 +127,31 @@ pub struct BookWithChapters {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ImportPreviewFile {
+    pub path: String,
+    pub relative_path: String,
+    pub name: String,
+    pub size: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportBookPreview {
+    pub root_path: String,
+    pub default_name: String,
+    pub files: Vec<ImportPreviewFile>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportBookPayload {
+    pub root_path: String,
+    pub book_name: String,
+    pub file_paths: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReadChapterResponse {
     pub chapter: Chapter,
     pub version: ChapterVersion,
