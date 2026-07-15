@@ -91,7 +91,7 @@ export async function createAnnotation(payload: AnnotationPayload) {
 
 export async function updateAnnotation(
   annotationId: string,
-  patch: Partial<Pick<Annotation, "highlightColor" | "comment" | "tags" | "status">>,
+  patch: Partial<Pick<Annotation, "highlightColor" | "comment" | "tags" | "status" | "isPinned">>,
 ) {
   return invoke<Annotation>("update_annotation", { annotationId, patch });
 }

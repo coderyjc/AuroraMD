@@ -53,6 +53,7 @@ export interface Annotation {
   comment: string;
   tags: string;
   status: AnnotationStatus;
+  isPinned: boolean;
   createdAt: string;
   updatedAt: string;
 }

@@ -72,6 +72,7 @@ pub struct Annotation {
     pub comment: String,
     pub tags: String,
     pub status: String,
+    pub is_pinned: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -161,6 +162,7 @@ pub struct AnnotationPatch {
     pub comment: Option<String>,
     pub tags: Option<String>,
     pub status: Option<String>,
+    pub is_pinned: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

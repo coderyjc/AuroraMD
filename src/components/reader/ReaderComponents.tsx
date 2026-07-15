@@ -1,5 +1,5 @@
-import { Check, Copy, FileText, GripVertical, Save, Trash2, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Check, Copy, FileText, GripVertical, Pin, PinOff, Save, Trash2, X } from "lucide-react";
+import { type MouseEvent as ReactMouseEvent, useEffect, useRef, useState } from "react";
 
 import {
   getDefaultThemeForSeries,
@@ -25,17 +25,65 @@ export interface SelectionDraft {
 export function AnnotationCard({
   annotation,
   active,
+  onSelect,
   onOpen,
+  onContextMenu,
 }: {
   annotation: Annotation;
   active: boolean;
+  onSelect: () => void;
   onOpen: () => void;
+  onContextMenu: (event: ReactMouseEvent<HTMLButtonElement>) => void;
 }) {
   return (
-    <button className={`annotation-card compact ${active ? "active" : ""}`} onClick={onOpen}>
+    <button
+      className={`annotation-card compact ${active ? "active" : ""} ${
+        annotation.isPinned ? "is-pinned" : ""
+      }`}
+      onClick={onSelect}
+      onDoubleClick={(event) => {
+        event.preventDefault();
+        onOpen();
+      }}
+      onContextMenu={onContextMenu}
+      title="单击跳转，双击查看详情"
+    >
       <span className="annotation-dot" style={{ background: annotation.highlightColor }} />
       <span className="annotation-summary">{annotation.comment.trim() || "无评论批注"}</span>
+      {annotation.isPinned && <Pin className="annotation-pin-icon" size={13} aria-hidden="true" />}
     </button>
+  );
+}
+
+export function AnnotationContextMenu({
+  annotation,
+  x,
+  y,
+  closing,
+  onTogglePinned,
+  onDelete,
+}: {
+  annotation: Annotation;
+  x: number;
+  y: number;
+  closing: boolean;
+  onTogglePinned: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div
+      className={`context-menu annotation-context-menu ${closing ? "is-closing" : ""}`}
+      style={{ left: x, top: y }}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <button onClick={onTogglePinned}>
+        {annotation.isPinned ? <PinOff size={15} /> : <Pin size={15} />}
+        {annotation.isPinned ? "取消置顶" : "置顶"}
+      </button>
+      <button className="danger" onClick={onDelete}>
+        <Trash2 size={15} /> 删除
+      </button>
+    </div>
   );
 }
 
@@ -331,11 +379,13 @@ export function NewAnnotationModal({
 }
 
 export function AnnotationDetailModal({
+  closing,
   annotation,
   onClose,
   onDelete,
   onSave,
 }: {
+  closing: boolean;
   annotation: Annotation;
   onClose: () => void;
   onDelete: () => void;
@@ -351,7 +401,7 @@ export function AnnotationDetailModal({
 
   return (
     <div
-      className="modal-backdrop"
+      className={`modal-backdrop ${closing ? "is-closing" : ""}`}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) {
           onClose();
@@ -569,7 +619,7 @@ export function TopNotice({
   const text = error || notice;
   if (!text) return null;
   return (
-    <div className={`top-notice ${error ? "error" : ""}`}>
+    <div className={`top-notice ${error ? "error" : ""}`} role={error ? "alert" : "status"}>
       <span>{text}</span>
       <button className="icon-button small" onClick={onClose}>
         <X size={14} />

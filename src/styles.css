@@ -3250,6 +3250,10 @@ button:disabled {
   padding: 6px;
 }
 
+.annotation-context-menu {
+  min-width: 144px;
+}
+
 .context-menu button {
   display: flex;
   width: 100%;
@@ -4029,6 +4033,7 @@ button:disabled {
 }
 
 .annotation-card.compact {
+  position: relative;
   display: grid;
   width: 100%;
   grid-template-columns: 10px minmax(0, 1fr);
@@ -4036,13 +4041,28 @@ button:disabled {
   gap: 10px;
   color: var(--ink);
   cursor: pointer;
-  padding: 12px;
+  padding: 12px 28px 12px 12px;
   text-align: left;
+}
+
+.annotation-card.compact.is-pinned {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 7%, transparent), transparent 42%),
+    color-mix(in srgb, var(--paper-strong) 82%, transparent);
 }
 
 .annotation-card.active {
   border-color: var(--accent);
   box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.annotation-pin-icon {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  color: color-mix(in srgb, var(--accent) 76%, var(--ink));
+  pointer-events: none;
 }
 
 .annotation-dot {
@@ -5526,18 +5546,39 @@ body.sorting-drag-active * {
   align-items: center;
   gap: 12px;
   transform: translateX(-50%);
-  border: 1px solid #9fcabb;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line));
   border-radius: 8px;
-  background: #f5fffb;
-  box-shadow: var(--shadow);
-  color: #164d45;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--paper-strong) 88%, var(--accent) 9%), transparent),
+    color-mix(in srgb, var(--paper) 88%, var(--shell-bg));
+  box-shadow: 0 16px 42px color-mix(in srgb, var(--ink) 16%, transparent);
+  color: var(--ink);
   padding: 10px 12px;
+  backdrop-filter: blur(18px) saturate(118%);
+}
+
+.top-notice span {
+  min-width: 0;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.top-notice .icon-button {
+  border-color: color-mix(in srgb, var(--accent) 26%, var(--line));
+  background: color-mix(in srgb, var(--paper-strong) 62%, transparent);
+  color: var(--ink);
 }
 
 .top-notice.error {
-  border-color: #e4a99a;
-  background: #fff6f2;
-  color: #9b2d1a;
+  border-color: color-mix(in srgb, #d84b3f 48%, var(--line));
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--paper-strong) 88%, #d84b3f 10%), transparent),
+    color-mix(in srgb, var(--paper) 90%, var(--shell-bg));
+  color: var(--ink);
+}
+
+.top-notice.error .icon-button {
+  border-color: color-mix(in srgb, #d84b3f 34%, var(--line));
 }
 
 .selection-menu {

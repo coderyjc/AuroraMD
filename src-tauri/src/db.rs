@@ -58,6 +58,7 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
             comment TEXT NOT NULL,
             tags TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'pending',
+            is_pinned INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             FOREIGN KEY(book_id) REFERENCES books(id) ON DELETE CASCADE,
@@ -147,6 +148,12 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
         "annotations",
         "rendered_end_offset",
         "ALTER TABLE annotations ADD COLUMN rendered_end_offset INTEGER",
+    )?;
+    ensure_column(
+        &conn,
+        "annotations",
+        "is_pinned",
+        "ALTER TABLE annotations ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0",
     )?;
     ensure_column(
         &conn,

@@ -618,14 +618,15 @@ fn update_annotation(
     conn.execute(
         r#"
         UPDATE annotations
-        SET highlight_color = ?1, comment = ?2, tags = ?3, status = ?4, updated_at = ?5
-        WHERE id = ?6
+        SET highlight_color = ?1, comment = ?2, tags = ?3, status = ?4, is_pinned = ?5, updated_at = ?6
+        WHERE id = ?7
         "#,
         params![
             patch.highlight_color.unwrap_or(existing.highlight_color),
             patch.comment.unwrap_or(existing.comment),
             patch.tags.unwrap_or(existing.tags),
             patch.status.unwrap_or(existing.status),
+            patch.is_pinned.unwrap_or(existing.is_pinned),
             now,
             annotation_id
         ],
@@ -1111,6 +1112,27 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
     } else {
         Ok(())
     };
+    let annotation_pinned_restore_result = if restore_result.is_ok()
+        && backup_has_column(&conn, "annotations", "is_pinned")?
+    {
+        conn.execute_batch(
+            r#"
+            UPDATE annotations
+            SET is_pinned = (
+                SELECT is_pinned
+                FROM backup.annotations
+                WHERE backup.annotations.id = annotations.id
+            )
+            WHERE EXISTS (
+                SELECT 1
+                FROM backup.annotations
+                WHERE backup.annotations.id = annotations.id
+            );
+            "#,
+        )
+    } else {
+        Ok(())
+    };
     let preset_restore_result = if restore_result.is_ok() && backup_has_table(&conn, "export_presets")? {
         conn.execute_batch(
             r#"
@@ -1135,6 +1157,8 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
         .map_err(|error| format!("Failed to restore theme series setting: {error}"))?;
     pinned_restore_result
         .map_err(|error| format!("Failed to restore pinned books: {error}"))?;
+    annotation_pinned_restore_result
+        .map_err(|error| format!("Failed to restore pinned annotations: {error}"))?;
     preset_restore_result.map_err(|error| format!("Failed to restore export presets: {error}"))?;
     detach_result.map_err(|error| format!("Failed to close backup database: {error}"))?;
 
@@ -1701,6 +1725,7 @@ fn get_annotation_by_id(conn: &Connection, annotation_id: &str) -> AppResult<Ann
             comment,
             tags,
             status,
+            is_pinned,
             created_at,
             updated_at
         FROM annotations
@@ -1720,20 +1745,20 @@ fn load_annotations(conn: &Connection, scope: &AnnotationScope) -> AppResult<Vec
     match (&scope.book_id, &scope.chapter_id, &scope.chapter_version_id) {
         (_, _, Some(version_id)) => query_annotations(
             conn,
-            "WHERE chapter_version_id = ?1 ORDER BY start_offset ASC, created_at ASC",
+            "WHERE chapter_version_id = ?1 ORDER BY is_pinned DESC, start_offset ASC, created_at ASC",
             params![version_id],
         ),
         (_, Some(chapter_id), None) => query_annotations(
             conn,
-            "WHERE chapter_id = ?1 ORDER BY start_offset ASC, created_at ASC",
+            "WHERE chapter_id = ?1 ORDER BY is_pinned DESC, start_offset ASC, created_at ASC",
             params![chapter_id],
         ),
         (Some(book_id), None, None) => query_annotations(
             conn,
-            "WHERE book_id = ?1 ORDER BY created_at DESC",
+            "WHERE book_id = ?1 ORDER BY is_pinned DESC, created_at DESC",
             params![book_id],
         ),
-        _ => query_annotations(conn, "ORDER BY created_at DESC", []),
+        _ => query_annotations(conn, "ORDER BY is_pinned DESC, created_at DESC", []),
     }
 }
 
@@ -1761,11 +1786,12 @@ fn query_annotations_by_ids(conn: &Connection, annotation_ids: &[String]) -> App
             comment,
             tags,
             status,
+            is_pinned,
             created_at,
             updated_at
         FROM annotations
         WHERE id IN ({placeholders})
-        ORDER BY created_at DESC
+        ORDER BY is_pinned DESC, created_at DESC
         "#
     );
     let mut stmt = conn.prepare(&sql).map_err(db_error)?;
@@ -1802,6 +1828,7 @@ where
             comment,
             tags,
             status,
+            is_pinned,
             created_at,
             updated_at
         FROM annotations
@@ -1838,6 +1865,7 @@ fn load_export_rows(conn: &Connection, scope: &AnnotationScope) -> AppResult<Vec
                 a.comment,
                 a.tags,
                 a.status,
+                a.is_pinned,
                 a.created_at,
                 a.updated_at,
                 c.title,
@@ -1884,6 +1912,7 @@ fn load_export_rows(conn: &Connection, scope: &AnnotationScope) -> AppResult<Vec
             a.comment,
             a.tags,
             a.status,
+            a.is_pinned,
             a.created_at,
             a.updated_at,
             c.title,
@@ -2015,15 +2044,16 @@ fn map_annotation(row: &rusqlite::Row<'_>) -> rusqlite::Result<Annotation> {
         comment: row.get(13)?,
         tags: row.get(14)?,
         status: row.get(15)?,
-        created_at: row.get(16)?,
-        updated_at: row.get(17)?,
+        is_pinned: row.get::<_, i64>(16)? != 0,
+        created_at: row.get(17)?,
+        updated_at: row.get(18)?,
     })
 }
 
 fn map_export_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ExportRow> {
     Ok(ExportRow {
         annotation: map_annotation(row)?,
-        chapter_title: row.get(18)?,
-        chapter_sort_index: row.get(19)?,
+        chapter_title: row.get(19)?,
+        chapter_sort_index: row.get(20)?,
     })
 }

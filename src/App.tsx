@@ -73,6 +73,7 @@ import {
 } from "./components/home/HomeModals";
 import {
   AnnotationCard,
+  AnnotationContextMenu,
   AnnotationDetailModal,
   ExportModal,
   NewAnnotationModal,
@@ -118,6 +119,7 @@ interface ContextMenuState {
   y: number;
 }
 
+type AnnotationMenuState = ContextMenuState & { annotation: Annotation };
 type ReaderBook = Book | BookSummary;
 
 interface ReaderSearchMatch {
@@ -226,7 +228,11 @@ export default function App() {
   const [pendingDraft, setPendingDraft] = useState<SelectionDraft | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [contextMenuClosing, setContextMenuClosing] = useState(false);
+  const [annotationMenu, setAnnotationMenu] = useState<AnnotationMenuState | null>(null);
+  const [annotationMenuClosing, setAnnotationMenuClosing] = useState(false);
   const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
+  const [detailAnnotationId, setDetailAnnotationId] = useState<string | null>(null);
+  const [detailAnnotationClosing, setDetailAnnotationClosing] = useState(false);
   const [activeSearchHighlight, setActiveSearchHighlight] = useState<
     (SearchHighlight & { chapterVersionId: string }) | null
   >(null);
@@ -364,6 +370,17 @@ export default function App() {
       window.removeEventListener("scroll", close, true);
     };
   }, [bookMenu]);
+
+  useEffect(() => {
+    if (!annotationMenu) return;
+    const close = () => closeAnnotationMenu();
+    window.addEventListener("click", close);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [annotationMenu]);
 
   useEffect(() => {
     if (workbenchBookId === "all") {
@@ -510,10 +527,10 @@ export default function App() {
     applyDomHighlights(articleRef.current, reader.annotations, visibleSearchHighlights);
   }, [reader, renderedHtml, visibleSearchHighlights]);
 
-  const activeAnnotation = useMemo(() => {
-    if (!reader || !activeAnnotationId) return null;
-    return reader.annotations.find((annotation) => annotation.id === activeAnnotationId) ?? null;
-  }, [activeAnnotationId, reader]);
+  const detailAnnotation = useMemo(() => {
+    if (!reader || !detailAnnotationId) return null;
+    return reader.annotations.find((annotation) => annotation.id === detailAnnotationId) ?? null;
+  }, [detailAnnotationId, reader]);
 
   const shortcutBindings = useMemo(
     () => parseShortcutBindings(settings.shortcutBindings),
@@ -537,6 +554,11 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && closeTopModal()) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "p") {
         event.preventDefault();
         return;
@@ -559,7 +581,29 @@ export default function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [shortcutBindings, activeBook, reader, chapters, pendingDraft]);
+  }, [
+    shortcutBindings,
+    activeBook,
+    reader,
+    chapters,
+    pendingDraft,
+    detailAnnotationId,
+    draft,
+    contextMenu,
+    annotationMenu,
+    searchOpen,
+    settingsOpen,
+    exportOpen,
+    sortOpen,
+    batchExportOpen,
+    workbenchNoteDetail,
+    homeSettingsOpen,
+    versionManagerBook,
+    syncReport,
+    deleteBookDraft,
+    renameBookDraft,
+    bookMenu,
+  ]);
 
   const readerStyle = useMemo(
     () =>
@@ -672,6 +716,9 @@ export default function App() {
     setSortOpen(false);
     setDraft(null);
     setActiveSearchHighlight(null);
+    setActiveAnnotationId(null);
+    setDetailAnnotationId(null);
+    setAnnotationMenu(null);
     try {
       const nextChapters = await listChapters(book.id);
       if (!nextChapters.length) {
@@ -708,6 +755,8 @@ export default function App() {
     setExportOpen(false);
     setSortOpen(false);
     setActiveSearchHighlight(null);
+    setDetailAnnotationId(null);
+    setAnnotationMenu(null);
     try {
       const nextChapters = await listChapters(note.bookId);
       const nextReader = await readChapterVersion(note.chapterVersionId).catch(() =>
@@ -749,6 +798,8 @@ export default function App() {
     setSortOpen(false);
     setSearchOpen(false);
     setActiveAnnotationId(null);
+    setDetailAnnotationId(null);
+    setAnnotationMenu(null);
     try {
       const nextChapters = await listChapters(result.bookId);
       const nextReader = await readChapterVersion(result.chapterVersionId).catch(() =>
@@ -792,6 +843,9 @@ export default function App() {
     setDraft(null);
     setExportText("");
     setActiveSearchHighlight(null);
+    setActiveAnnotationId(null);
+    setDetailAnnotationId(null);
+    setAnnotationMenu(null);
     try {
       const nextReader = await readChapter(chapterId);
       playReaderMotion("content");
@@ -808,6 +862,9 @@ export default function App() {
     setBusy(true);
     setDraft(null);
     setActiveSearchHighlight(null);
+    setActiveAnnotationId(null);
+    setDetailAnnotationId(null);
+    setAnnotationMenu(null);
     try {
       const nextReader = await readChapterVersion(chapterVersionId);
       playReaderMotion("content");
@@ -870,6 +927,8 @@ export default function App() {
         : renderedSelection.endOffset;
     setError("");
     setActiveAnnotationId(null);
+    setDetailAnnotationId(null);
+    setAnnotationMenu(null);
     return {
       selectedText,
       startOffset,
@@ -917,9 +976,7 @@ export default function App() {
       const annotation = await createAnnotation(payload);
       setReader({
         ...reader,
-        annotations: [...reader.annotations, annotation].sort(
-          (left, right) => left.startOffset - right.startOffset,
-        ),
+        annotations: sortReaderAnnotations([...reader.annotations, annotation]),
       });
       setDraft(null);
       setPendingDraft(null);
@@ -940,26 +997,39 @@ export default function App() {
         annotations: reader.annotations.filter((annotation) => annotation.id !== annotationId),
       });
       if (activeAnnotationId === annotationId) setActiveAnnotationId(null);
+      if (detailAnnotationId === annotationId) setDetailAnnotationId(null);
       void refreshNotes();
     } catch (err) {
       setError(readError(err));
     }
   }
 
-  async function handleUpdateAnnotation(annotation: Annotation, patch: Partial<Annotation>) {
-    if (!reader) return;
+  async function handleUpdateAnnotation(
+    annotation: Annotation,
+    patch: Partial<Annotation>,
+    options: { closeDetail?: boolean } = { closeDetail: true },
+  ) {
+    if (!reader) return false;
     try {
       const updated = await updateAnnotation(annotation.id, {
         highlightColor: patch.highlightColor,
         comment: patch.comment,
+        tags: patch.tags,
+        status: patch.status,
+        isPinned: patch.isPinned,
       });
       setReader({
         ...reader,
-        annotations: reader.annotations.map((item) => (item.id === updated.id ? updated : item)),
+        annotations: sortReaderAnnotations(
+          reader.annotations.map((item) => (item.id === updated.id ? updated : item)),
+        ),
       });
+      if (options.closeDetail ?? true) closeReaderAnnotationDetail();
       void refreshNotes();
+      return true;
     } catch (err) {
       setError(readError(err));
+      return false;
     }
   }
 
@@ -968,8 +1038,35 @@ export default function App() {
     const mark = target.closest<HTMLElement>("[data-annotation-id]");
     if (mark) {
       const annotationId = mark.dataset.annotationId;
-      if (annotationId) selectReaderAnnotation(annotationId);
+      if (annotationId) openReaderAnnotationDetail(annotationId);
     }
+  }
+
+  function handleAnnotationContextMenu(
+    event: ReactMouseEvent<HTMLButtonElement>,
+    annotation: Annotation,
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeSelectionContextMenu();
+    setAnnotationMenuClosing(false);
+    setAnnotationMenu({
+      annotation,
+      x: Math.min(event.clientX, window.innerWidth - 188),
+      y: Math.min(event.clientY, window.innerHeight - 92),
+    });
+  }
+
+  async function toggleAnnotationPinned(annotation: Annotation) {
+    const nextPinned = !annotation.isPinned;
+    closeAnnotationMenu();
+    const saved = await handleUpdateAnnotation(annotation, { isPinned: nextPinned }, { closeDetail: false });
+    if (saved) setNotice(nextPinned ? "批注已置顶。" : "批注已取消置顶。");
+  }
+
+  function deleteAnnotationFromMenu(annotation: Annotation) {
+    closeAnnotationMenu();
+    void handleDeleteAnnotation(annotation.id);
   }
 
   function openSortModal() {
@@ -1476,6 +1573,94 @@ export default function App() {
     animateClose(setContextMenuClosing, () => setContextMenu(null));
   }
 
+  function closeAnnotationMenu() {
+    if (!annotationMenu) return;
+    animateClose(setAnnotationMenuClosing, () => setAnnotationMenu(null));
+  }
+
+  function closeReaderAnnotationDetail() {
+    if (!detailAnnotationId) return;
+    animateClose(setDetailAnnotationClosing, () => setDetailAnnotationId(null));
+  }
+
+  function closeTopModal() {
+    if (activeBook) {
+      if (detailAnnotationId) {
+        closeReaderAnnotationDetail();
+        return true;
+      }
+      if (draft) {
+        setDraft(null);
+        window.getSelection()?.removeAllRanges();
+        return true;
+      }
+      if (annotationMenu) {
+        closeAnnotationMenu();
+        return true;
+      }
+      if (contextMenu) {
+        closeSelectionContextMenu();
+        return true;
+      }
+      if (searchOpen) {
+        closeSearchModal();
+        return true;
+      }
+      if (settingsOpen) {
+        closeReaderSettingsPanel();
+        return true;
+      }
+      if (exportOpen) {
+        closeExportModal();
+        return true;
+      }
+      if (sortOpen) {
+        setSortOpen(false);
+        setSortDragChapterId(null);
+        return true;
+      }
+      return false;
+    }
+
+    if (batchExportOpen) {
+      setBatchExportOpen(false);
+      return true;
+    }
+    if (searchOpen) {
+      closeSearchModal();
+      return true;
+    }
+    if (workbenchNoteDetail) {
+      closeWorkbenchNoteDetail();
+      return true;
+    }
+    if (homeSettingsOpen) {
+      closeHomeSettingsModal();
+      return true;
+    }
+    if (versionManagerBook) {
+      setVersionManagerBook(null);
+      return true;
+    }
+    if (syncReport) {
+      setSyncReport(null);
+      return true;
+    }
+    if (deleteBookDraft) {
+      setDeleteBookDraft(null);
+      return true;
+    }
+    if (renameBookDraft) {
+      setRenameBookDraft(null);
+      return true;
+    }
+    if (bookMenu) {
+      closeBookMenu();
+      return true;
+    }
+    return false;
+  }
+
   function runViewTransition(callback: () => void) {
     const startViewTransition = (document as ViewTransitionDocument).startViewTransition;
     if (typeof startViewTransition === "function") {
@@ -1531,6 +1716,12 @@ export default function App() {
   function selectReaderAnnotation(annotationId: string) {
     playReaderMotion("jump");
     setActiveAnnotationId(annotationId);
+  }
+
+  function openReaderAnnotationDetail(annotationId: string) {
+    selectReaderAnnotation(annotationId);
+    setDetailAnnotationClosing(false);
+    setDetailAnnotationId(annotationId);
   }
 
   function handleReaderSearchKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
@@ -2020,7 +2211,9 @@ export default function App() {
                   key={annotation.id}
                   annotation={annotation}
                   active={annotation.id === activeAnnotationId}
-                  onOpen={() => selectReaderAnnotation(annotation.id)}
+                  onSelect={() => selectReaderAnnotation(annotation.id)}
+                  onOpen={() => openReaderAnnotationDetail(annotation.id)}
+                  onContextMenu={(event) => handleAnnotationContextMenu(event, annotation)}
                 />
               ))
             ) : (
@@ -2157,6 +2350,16 @@ export default function App() {
           </button>
         </div>
       )}
+      {annotationMenu && (
+        <AnnotationContextMenu
+          annotation={annotationMenu.annotation}
+          x={annotationMenu.x}
+          y={annotationMenu.y}
+          closing={annotationMenuClosing}
+          onTogglePinned={() => void toggleAnnotationPinned(annotationMenu.annotation)}
+          onDelete={() => deleteAnnotationFromMenu(annotationMenu.annotation)}
+        />
+      )}
       {draft && (
         <NewAnnotationModal
           draft={draft}
@@ -2168,12 +2371,13 @@ export default function App() {
           onSave={() => void saveDraft()}
         />
       )}
-      {activeAnnotation && (
+      {detailAnnotation && (
         <AnnotationDetailModal
-          annotation={activeAnnotation}
-          onClose={() => setActiveAnnotationId(null)}
-          onDelete={() => void handleDeleteAnnotation(activeAnnotation.id)}
-          onSave={(patch) => void handleUpdateAnnotation(activeAnnotation, patch)}
+          closing={detailAnnotationClosing}
+          annotation={detailAnnotation}
+          onClose={closeReaderAnnotationDetail}
+          onDelete={() => void handleDeleteAnnotation(detailAnnotation.id)}
+          onSave={(patch) => void handleUpdateAnnotation(detailAnnotation, patch)}
         />
       )}
     </div>
@@ -2188,6 +2392,14 @@ function readError(err: unknown) {
 function clamp(value: number, min: number, max: number) {
   const upper = Math.max(min, max);
   return Math.min(Math.max(value, min), upper);
+}
+
+function sortReaderAnnotations(annotations: Annotation[]) {
+  return [...annotations].sort((left, right) => {
+    if (left.isPinned !== right.isPinned) return left.isPinned ? -1 : 1;
+    if (left.startOffset !== right.startOffset) return left.startOffset - right.startOffset;
+    return left.createdAt.localeCompare(right.createdAt);
+  });
 }
 
 function getReadingStats(content: string) {
