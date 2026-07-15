@@ -81,7 +81,7 @@ import {
   TopNotice,
   type SelectionDraft,
 } from "./components/reader/ReaderComponents";
-import { defaultSettings, getEffectiveThemeSeries, highlightColors } from "./constants";
+import { defaultSettings, getDefaultThemeForSeries, getEffectiveThemeSeries, highlightColors } from "./constants";
 import {
   applyDomHighlights,
   findSelectionOffset,
@@ -267,6 +267,10 @@ export default function App() {
   const readerSearchInputRef = useRef<HTMLInputElement | null>(null);
   const importDropRef = useRef<HTMLButtonElement | null>(null);
   const readerMotionTimerRef = useRef<number | null>(null);
+  const latestSettingsRef = useRef<AppSettings>(defaultSettings);
+  const searchThemeSnapshotRef = useRef<Pick<AppSettings, "themeSeries" | "theme"> | null>(null);
+
+  latestSettingsRef.current = settings;
 
   useEffect(() => {
     void boot();
@@ -533,6 +537,10 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "p") {
+        event.preventDefault();
+        return;
+      }
       if (
         activeBook &&
         (event.ctrlKey || event.metaKey) &&
@@ -1379,16 +1387,46 @@ export default function App() {
   }
 
   function openSearchModal() {
+    const latestSettings = latestSettingsRef.current;
+    searchThemeSnapshotRef.current = {
+      themeSeries: latestSettings.themeSeries,
+      theme: latestSettings.theme,
+    };
     setSearchQuery("");
     setSearchClosing(false);
     setSearchOpen(true);
   }
 
   function closeSearchModal() {
+    const snapshot = searchThemeSnapshotRef.current;
+    if (snapshot) {
+      setSettings((current) => ({ ...current, ...snapshot }));
+      searchThemeSnapshotRef.current = null;
+    }
     animateClose(setSearchClosing, () => {
       setSearchOpen(false);
       setSearchQuery("");
     });
+  }
+
+  function previewSearchTheme(themeSeries: string, theme?: string) {
+    const previewTheme = theme ?? getDefaultThemeForSeries(themeSeries);
+    if (!searchThemeSnapshotRef.current) {
+      const latestSettings = latestSettingsRef.current;
+      searchThemeSnapshotRef.current = {
+        themeSeries: latestSettings.themeSeries,
+        theme: latestSettings.theme,
+      };
+    }
+    setSettings((current) => {
+      if (current.themeSeries === themeSeries && current.theme === previewTheme) return current;
+      return { ...current, themeSeries, theme: previewTheme };
+    });
+  }
+
+  function commitSearchTheme(themeSeries: string, theme: string) {
+    searchThemeSnapshotRef.current = null;
+    applySettings({ themeSeries, theme });
   }
 
   function openHomeSettingsModal() {
@@ -1749,8 +1787,11 @@ export default function App() {
             query={searchQuery}
             books={books}
             notes={notes}
+            settings={settings}
             onQueryChange={setSearchQuery}
             onClose={closeSearchModal}
+            onPreviewTheme={previewSearchTheme}
+            onCommitTheme={commitSearchTheme}
             onOpenBook={(book) => {
               closeSearchModal();
               void openBook(book);
@@ -2085,8 +2126,11 @@ export default function App() {
           query={searchQuery}
           books={books}
           notes={notes}
+          settings={settings}
           onQueryChange={setSearchQuery}
           onClose={closeSearchModal}
+          onPreviewTheme={previewSearchTheme}
+          onCommitTheme={commitSearchTheme}
           onOpenBook={(book) => {
             closeSearchModal();
             void openBook(book);

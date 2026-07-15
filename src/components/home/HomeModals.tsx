@@ -48,7 +48,19 @@ export type RenameBookState = { book: BookSummary; name: string };
 type BookSearchResultItem = { id: string; kind: "book"; book: BookSummary };
 type NoteSearchResultItem = { id: string; kind: "note"; note: NoteItem };
 type ContentSearchResultItem = { id: string; kind: "content"; result: ContentSearchResult };
-type SearchResultItem = BookSearchResultItem | NoteSearchResultItem | ContentSearchResultItem;
+type CommandSearchResultItem = { id: "command:theme"; kind: "command"; label: string; description: string };
+type ThemeSeriesOption = (typeof visibleThemeSeriesOptions)[number];
+type ThemeSkinOption = ReturnType<typeof getThemesForSeries>[number];
+type ThemeSeriesSearchResultItem = { id: string; kind: "theme-series"; series: ThemeSeriesOption };
+type ThemeSkinSearchResultItem = { id: string; kind: "theme"; theme: ThemeSkinOption };
+type SearchResultItem =
+  | CommandSearchResultItem
+  | BookSearchResultItem
+  | NoteSearchResultItem
+  | ContentSearchResultItem
+  | ThemeSeriesSearchResultItem
+  | ThemeSkinSearchResultItem;
+type SearchMode = "search" | "theme-series" | "theme";
 
 interface VersionDiffResult {
   base: ReadChapterResponse;
@@ -682,8 +694,11 @@ export function SearchModal({
   query,
   books,
   notes,
+  settings,
   onQueryChange,
   onClose,
+  onPreviewTheme,
+  onCommitTheme,
   onOpenBook,
   onOpenNote,
   onOpenContentResult,
@@ -692,18 +707,50 @@ export function SearchModal({
   query: string;
   books: BookSummary[];
   notes: NoteItem[];
+  settings: AppSettings;
   onQueryChange: (query: string) => void;
   onClose: () => void;
+  onPreviewTheme: (themeSeries: string, theme?: string) => void;
+  onCommitTheme: (themeSeries: string, theme: string) => void;
   onOpenBook: (book: BookSummary) => void;
   onOpenNote: (note: NoteItem) => void;
   onOpenContentResult: (result: ContentSearchResult) => void;
 }) {
+  const [mode, setMode] = useState<SearchMode>("search");
+  const [selectedThemeSeriesId, setSelectedThemeSeriesId] = useState(getEffectiveThemeSeries(settings.themeSeries));
   const [contentResults, setContentResults] = useState<ContentSearchResult[]>([]);
   const [contentSearchBusy, setContentSearchBusy] = useState(false);
   const [contentSearchError, setContentSearchError] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const resultRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const normalized = query.trim().toLowerCase();
+  const selectedThemeSeries =
+    visibleThemeSeriesOptions.find((series) => series.id === selectedThemeSeriesId) ?? visibleThemeSeriesOptions[0];
+  const commandItems = useMemo<CommandSearchResultItem[]>(
+    () => [
+      {
+        id: "command:theme",
+        kind: "command",
+        label: "切换主题",
+        description: "选择主题系列和主题皮肤",
+      },
+    ],
+    [],
+  );
+  const themeSeriesItems = useMemo<ThemeSeriesSearchResultItem[]>(
+    () =>
+      visibleThemeSeriesOptions
+        .filter((series) => matchesSearchText([series.id, series.label, series.description], normalized))
+        .map((series) => ({ id: `theme-series:${series.id}`, kind: "theme-series", series })),
+    [normalized],
+  );
+  const themeItems = useMemo<ThemeSkinSearchResultItem[]>(
+    () =>
+      getThemesForSeries(selectedThemeSeriesId)
+        .filter((theme) => matchesSearchText([theme.value, theme.label, theme.description], normalized))
+        .map((theme) => ({ id: `theme:${theme.value}`, kind: "theme", theme })),
+    [normalized, selectedThemeSeriesId],
+  );
   const matchedBooks = useMemo(
     () =>
       normalized
@@ -736,18 +783,22 @@ export function SearchModal({
   );
   const contentItems = useMemo<ContentSearchResultItem[]>(
     () =>
-      normalized.length >= 2
+      mode === "search" && normalized.length >= 2
         ? contentResults.map((result, index) => ({
             id: `content:${result.chapterVersionId}:${result.startOffset}:${index}`,
             kind: "content",
             result,
           }))
         : [],
-    [contentResults, normalized.length],
+    [contentResults, mode, normalized.length],
   );
-  const resultItems = useMemo(
-    () => [...bookItems, ...noteItems, ...contentItems],
-    [bookItems, noteItems, contentItems],
+  const resultItems = useMemo<SearchResultItem[]>(
+    () => {
+      if (mode === "theme-series") return themeSeriesItems;
+      if (mode === "theme") return themeItems;
+      return [...commandItems, ...bookItems, ...noteItems, ...contentItems];
+    },
+    [bookItems, commandItems, contentItems, mode, noteItems, themeItems, themeSeriesItems],
   );
   const resultIndexById = useMemo(
     () => new Map(resultItems.map((item, index) => [item.id, index])),
@@ -755,6 +806,12 @@ export function SearchModal({
   );
 
   useEffect(() => {
+    if (mode !== "search") {
+      setContentResults([]);
+      setContentSearchBusy(false);
+      setContentSearchError("");
+      return;
+    }
     const searchText = query.trim();
     if (searchText.length < 2) {
       setContentResults([]);
@@ -783,11 +840,11 @@ export function SearchModal({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [query]);
+  }, [mode, query]);
 
   useEffect(() => {
     setActiveIndex(resultItems.length ? 0 : -1);
-  }, [query]);
+  }, [mode, query, selectedThemeSeriesId, resultItems.length]);
 
   useEffect(() => {
     setActiveIndex((current) => {
@@ -803,7 +860,64 @@ export function SearchModal({
     resultRefs.current[activeIndex]?.scrollIntoView({ block: "nearest" });
   }, [activeIndex]);
 
+  function matchesSearchText(values: Array<string | undefined>, searchText: string) {
+    if (!searchText) return true;
+    return values.filter(Boolean).join(" ").toLowerCase().includes(searchText);
+  }
+
+  function previewSearchResult(item?: SearchResultItem) {
+    if (!item) return;
+    if (item.kind === "theme-series") {
+      onPreviewTheme(item.series.id, getDefaultThemeForSeries(item.series.id));
+      return;
+    }
+    if (item.kind === "theme") {
+      onPreviewTheme(item.theme.series, item.theme.value);
+    }
+  }
+
+  function setActiveResult(index: number, preview = false) {
+    if (index < 0 || index >= resultItems.length) return;
+    setActiveIndex(index);
+    if (preview) previewSearchResult(resultItems[index]);
+  }
+
+  function enterThemeSeriesMode() {
+    const currentSeriesId = getEffectiveThemeSeries(settings.themeSeries);
+    const currentIndex = visibleThemeSeriesOptions.findIndex((series) => series.id === currentSeriesId);
+    setSelectedThemeSeriesId(currentSeriesId);
+    setMode("theme-series");
+    onQueryChange("");
+    setActiveIndex(currentIndex >= 0 ? currentIndex : 0);
+  }
+
+  function enterThemeMode(series: ThemeSeriesOption) {
+    const firstTheme = getThemesForSeries(series.id)[0];
+    setSelectedThemeSeriesId(series.id);
+    setMode("theme");
+    onQueryChange("");
+    setActiveIndex(0);
+    if (firstTheme) onPreviewTheme(series.id, firstTheme.value);
+  }
+
+  function commitTheme(theme: ThemeSkinOption) {
+    onCommitTheme(theme.series, theme.value);
+    onClose();
+  }
+
   function openSearchResult(item: SearchResultItem) {
+    if (item.kind === "command") {
+      enterThemeSeriesMode();
+      return;
+    }
+    if (item.kind === "theme-series") {
+      enterThemeMode(item.series);
+      return;
+    }
+    if (item.kind === "theme") {
+      commitTheme(item.theme);
+      return;
+    }
     if (item.kind === "book") {
       onOpenBook(item.book);
       return;
@@ -826,10 +940,8 @@ export function SearchModal({
       event.preventDefault();
       if (!resultItems.length) return;
       const direction = event.key === "ArrowDown" ? 1 : -1;
-      setActiveIndex((current) => {
-        const start = current < 0 ? (direction > 0 ? -1 : 0) : current;
-        return (start + direction + resultItems.length) % resultItems.length;
-      });
+      const start = activeIndex < 0 ? (direction > 0 ? -1 : 0) : activeIndex;
+      setActiveResult((start + direction + resultItems.length) % resultItems.length, true);
       return;
     }
 
@@ -850,10 +962,17 @@ export function SearchModal({
       },
       className: [className, isActive ? "is-active" : ""].filter(Boolean).join(" "),
       "aria-selected": isActive,
-      onMouseEnter: () => setActiveIndex(index),
+      onMouseEnter: () => setActiveResult(index, true),
       onClick: () => openSearchResult(item),
     };
   }
+
+  const placeholder =
+    mode === "theme-series"
+      ? "选择主题系列"
+      : mode === "theme"
+        ? `选择${selectedThemeSeries.label}的主题`
+        : "搜索书籍、批注、正文或指令";
 
   return (
     <div
@@ -868,14 +987,29 @@ export function SearchModal({
             onChange={(event) => onQueryChange(event.target.value)}
             onKeyDown={handleSearchKeyDown}
             autoFocus
-            placeholder="搜索书籍、批注、正文"
+            placeholder={placeholder}
           />
           <button className="icon-button small" onClick={onClose}>
             <X size={14} />
           </button>
         </div>
         <div className="search-results">
-          {bookItems.length > 0 && (
+          {mode === "search" && commandItems.length > 0 && (
+            <>
+              <h3>指令</h3>
+              {commandItems.map((item) => (
+                <button key={item.id} {...resultButtonProps(item, "command-search-result")}>
+                  <Palette size={15} />
+                  <span>
+                    <strong>{item.label}</strong>
+                    <small>{item.description}</small>
+                  </span>
+                  <ArrowRight size={14} />
+                </button>
+              ))}
+            </>
+          )}
+          {mode === "search" && bookItems.length > 0 && (
             <>
               <h3>书籍</h3>
               {bookItems.map((item) => (
@@ -885,7 +1019,7 @@ export function SearchModal({
               ))}
             </>
           )}
-          {noteItems.length > 0 && (
+          {mode === "search" && noteItems.length > 0 && (
             <>
               <h3>批注</h3>
               {noteItems.map((item) => (
@@ -895,7 +1029,7 @@ export function SearchModal({
               ))}
             </>
           )}
-          {(contentSearchBusy || contentSearchError || contentItems.length > 0) && (
+          {mode === "search" && (contentSearchBusy || contentSearchError || contentItems.length > 0) && (
             <>
               <h3>正文 {contentSearchBusy ? "搜索中" : contentItems.length ? contentItems.length : ""}</h3>
               {contentSearchError && <p className="search-error">{contentSearchError}</p>}
@@ -912,6 +1046,65 @@ export function SearchModal({
                 ))}
             </>
           )}
+          {mode === "theme-series" && (
+            <>
+              <h3>主题系列</h3>
+              {themeSeriesItems.map((item) => {
+                const isCurrent = getEffectiveThemeSeries(settings.themeSeries) === item.series.id;
+                return (
+                  <button key={item.id} {...resultButtonProps(item, "theme-search-result")}>
+                    <span
+                      className="theme-preview series-preview"
+                      style={{
+                        backgroundColor: item.series.previewBg,
+                        borderColor: item.series.accent,
+                        color: item.series.previewInk,
+                      }}
+                    >
+                      <i style={{ backgroundColor: item.series.accent }} />
+                      <i />
+                      <i />
+                    </span>
+                    <span>
+                      <strong>{item.series.label}</strong>
+                      <small>{item.series.description}</small>
+                    </span>
+                    {isCurrent ? <Check size={14} /> : <ArrowRight size={14} />}
+                  </button>
+                );
+              })}
+            </>
+          )}
+          {mode === "theme" && (
+            <>
+              <h3>{selectedThemeSeries.label}</h3>
+              {themeItems.map((item) => {
+                const isCurrent = settings.themeSeries === item.theme.series && settings.theme === item.theme.value;
+                return (
+                  <button key={item.id} {...resultButtonProps(item, "theme-search-result")}>
+                    <span
+                      className="theme-preview"
+                      style={{
+                        backgroundColor: item.theme.previewBg,
+                        borderColor: item.theme.accent,
+                        color: item.theme.previewInk,
+                      }}
+                    >
+                      <i style={{ backgroundColor: item.theme.accent }} />
+                      <i />
+                      <i />
+                    </span>
+                    <span>
+                      <strong>{item.theme.label}</strong>
+                      <small>{item.theme.description}</small>
+                    </span>
+                    {isCurrent && <Check size={14} />}
+                  </button>
+                );
+              })}
+            </>
+          )}
+          {!resultItems.length && <p className="search-empty">没有匹配结果</p>}
         </div>
       </section>
     </div>

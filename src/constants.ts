@@ -597,10 +597,42 @@ export const themeOptions = [
   },
 ] as const;
 
+const nightThemeValues = new Set<string>([
+  "night",
+  "midnight",
+  "graphite",
+  "umber",
+  "basalt",
+  "console",
+  "amber",
+  "aurora",
+  "noir",
+  "dusk",
+  "smoke",
+  "redcockpit",
+  "inklamp",
+  "safelight",
+  "blackout",
+  "midnightissue",
+  "darkhud",
+]);
+
+function orderThemesByDayFirst(themes: Array<(typeof themeOptions)[number]>) {
+  return themes
+    .map((theme, index) => ({ theme, index }))
+    .sort((left, right) => {
+      const leftIsNight = nightThemeValues.has(left.theme.value);
+      const rightIsNight = nightThemeValues.has(right.theme.value);
+      if (leftIsNight !== rightIsNight) return leftIsNight ? 1 : -1;
+      return left.index - right.index;
+    })
+    .map(({ theme }) => theme);
+}
+
 export function getThemesForSeries(seriesId: string) {
   const effectiveSeriesId = getEffectiveThemeSeries(seriesId);
   const themes = themeOptions.filter((theme) => theme.series === effectiveSeriesId);
-  return themes.length ? themes : themeOptions.filter((theme) => theme.series === "classic");
+  return orderThemesByDayFirst(themes.length ? themes : themeOptions.filter((theme) => theme.series === "classic"));
 }
 
 export function getEffectiveThemeSeries(seriesId: string) {

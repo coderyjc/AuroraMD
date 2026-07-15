@@ -8,10 +8,10 @@ Loop Book 是一个本地优先的 Markdown 桌面阅读器，用来阅读按章
 
 如果重开 Codex 会话，请先读本节和下面的“开发踩坑记录”。当前项目状态以本 README 为准。
 
-- 当前版本：`v0.4.0`。
+- 当前版本：`v0.4.2`。
 - 当前工作区：`E:\code\github\annotaloop`。
 - 用户验证入口：`src-tauri/target/release/loop-book.exe`。完成功能或修复后，默认直接执行 `npm.cmd run tauri -- build`，不要只停在前端构建或 dev server。
-- 最近一次 release 构建输出为 `src-tauri/target/release/loop-book.exe` 和 `src-tauri/target/release/bundle/nsis/Loop Book_0.4.0_x64-setup.exe`。
+- 最近一次 release 构建输出为 `src-tauri/target/release/loop-book.exe` 和 `src-tauri/target/release/bundle/nsis/Loop Book_0.4.2_x64-setup.exe`。
 - 目前窗口已改为 Tauri 无原生装饰窗口：`src-tauri/tauri.conf.json` 中 `decorations` 为 `false`，应用内标题栏在 `src/App.tsx` 的 `AppTitlebar` 和 `src/styles.css` 的 `.desktop-titlebar`。
 - 首页 gallery 书籍置顶不是图钉方案，而是左侧渐变色条；对应样式是 `.book-entry::before` 和 `.book-entry.is-pinned::before`。
 - 阅读器正文上方显示“本文共 xx 字 / 阅读需要 xx 分钟”，正文底部有“上一篇 / 下一篇”导航。
@@ -33,9 +33,13 @@ Loop Book 是一个本地优先的 Markdown 桌面阅读器，用来阅读按章
 - 支持拖拽调整章节顺序。
 - 阅读器左栏、正文区、右栏宽度可拖拽调整；左栏内“大纲/章节”的分隔位置也可拖拽调整。
 - 阅读器正文上方显示当前章节字数和预计阅读时间，底部提供上一篇/下一篇导航。
-- 阅读器设置包含主题、字体、字号、行距、正文宽度、页边距、段落间距和聚焦模式。
+- 阅读器搜索位于批注栏下半部分，支持拖拽调节高度；也可以在阅读器内按 `Ctrl+F` 激活搜索。输入关键词后，正文中会显示区别于批注的搜索高亮，结果列表最多显示两行摘要，点击可跳转到对应段落。
+- 阅读器设置包含主题系列、主题皮肤、字体、字号、行距、正文宽度、页边距、段落间距和聚焦模式。
 - 聚焦模式开启后，鼠标悬浮正文元素时仅当前元素及相邻元素正常显示，其余上下文淡化；悬浮正文空白处时整体淡化。
-- 首页设置支持主题选择、快捷键录制、本地备份和恢复。
+- 首页设置支持主题系列/主题皮肤选择、快捷键录制、本地备份和恢复；主题设置使用左侧系列、右侧子主题的双栏布局。
+- 主题系统支持多套系列皮肤，包括经典纸书、拼贴海报、光谱玻璃、夜航仪表、东方书斋、暗房胶片、故障霓屏、解构杂志和透明系统等系列；不同系列会同时改变背景、前景、卡片、界面质感和关键控件风格。
+- `Ctrl+K` 搜索框已扩展为命令面板：默认不展开批注列表，支持上下箭头选择、回车跳转、`Esc` 退出，并提供“切换主题”指令。主题切换流程仿照 VS Code，可先预览系列默认主题，再预览子主题；确认前按 `Esc` 会恢复原主题。
+- `Ctrl+P` 已被屏蔽，避免在阅读器或主页误触系统打印。
 - 汇总全书批注，并按多种模板导出 Markdown：
   - 阅读笔记
   - AI 修改包
@@ -143,7 +147,7 @@ npm.cmd run tauri -- build
 
 ```text
 src-tauri/target/release/loop-book.exe
-src-tauri/target/release/bundle/nsis/Loop Book_0.4.0_x64-setup.exe
+src-tauri/target/release/bundle/nsis/Loop Book_0.4.2_x64-setup.exe
 ```
 
 ## 数据存储
@@ -160,7 +164,7 @@ loop-book.sqlite3
 - 章节内容快照和版本号
 - 批注、高亮、评论和上下文
 - 阅读进度
-- 阅读器设置、首页主题、快捷键和聚焦模式开关
+- 阅读器设置、首页主题系列/主题皮肤、快捷键和聚焦模式开关
 
 导入的 Markdown 文件不会被移动或复制，仍保留在原始文件夹中。
 
@@ -232,16 +236,19 @@ src-tauri/target/release/loop-book.exe
   2. `cargo check`（在 `src-tauri/` 下）
   3. `cargo test`（在 `src-tauri/` 下）
   4. `npm.cmd run tauri -- build`
-- 当前 v0.4.0 阅读器搜索更新后已通过：
+- 当前 v0.4.2 主题命令面板和快捷键修复后已通过：
   - `npm.cmd run build`
   - `npm.cmd run tauri -- build`
+- 最近一次 v0.4.2 release 构建输出：
+  - `src-tauri/target/release/loop-book.exe`
+  - `src-tauri/target/release/bundle/nsis/Loop Book_0.4.2_x64-setup.exe`
 - 最近一次自定义标题栏更新后已通过：
   - `npm.cmd run build`
   - `npm.cmd run tauri -- build`
 - Windows 安装包输出位置通常是：
 
 ```text
-src-tauri/target/release/bundle/nsis/Loop Book_0.4.0_x64-setup.exe
+src-tauri/target/release/bundle/nsis/Loop Book_0.4.2_x64-setup.exe
 ```
 - 如果 `cargo check` 或 Tauri 打包时报错，提示去读取另一个旧目录下的 `target/.../permissions/...app_hide.toml`，通常是 Tauri/Rust 构建缓存里残留了旧绝对路径。排查时可以临时使用独立 target 目录：
 
@@ -251,6 +258,20 @@ cargo check
 ```
 
 清理临时目录前先确认路径仍在当前工作区内，必要时把只读属性归一化后再删，避免误删工作区外文件或被 Windows 文件属性拦住。
+
+## v0.4.2 功能摘要
+
+- `Ctrl+K` 已从单纯搜索升级为命令面板。第一栏为“指令”，目前支持“切换主题”；后续仍保留书籍等搜索结果入口。
+- “切换主题”支持键盘驱动的两级流程：先选择主题系列并预览该系列第一个主题，再选择具体子主题并实时预览；按回车或点击才提交，按 `Esc` 直接退出并恢复进入命令面板前的主题。
+- 修复了通过 `Ctrl+K` 或设置切换主题后，再次打开 `Ctrl+K` 并按 `Esc` 会错误回到第一个系列第一个子主题的问题。
+- 屏蔽 `Ctrl+P`，防止用户误触系统打印。
+- 主题系列的子主题重新排序为日间主题在前、夜间主题在后。
+- 主题系统补充了多组系列皮肤：经典纸书、拼贴海报、光谱玻璃、夜航仪表、东方书斋、暗房胶片、故障霓屏、解构杂志、透明系统等，并让不同系列在背景、前景、卡片、控件和界面质感上形成明显差异。
+- 设置中的主题选择改为左侧系列列表、右侧子主题卡片的双栏结构，并适配主题系列列表滚动条。
+- 阅读器新增搜索面板：位于批注栏下半部分，可调节高度，支持 `Ctrl+F` 激活、正文搜索高亮、结果摘要列表和点击跳转。
+- 多处界面关闭、切换和跳转补充快速流畅的过渡动画，包括 `Ctrl+K`、主页设置、批注详情、右键菜单、导出弹窗、主页/阅读器切换、视图切换、章节/搜索/批注跳转等场景。
+- 下拉列表的下拉部分已统一美化并遵循当前主题，同时保持下拉框本体样式不被额外染色。
+- 顶部通知气泡增加 3 秒自动消失时间，例如“已取消置顶”这类提示。
 
 ## v0.3.0 功能摘要
 
