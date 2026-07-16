@@ -2054,22 +2054,14 @@ function DiffBlockCard({ block }: { block: DiffBlock }) {
 }
 
 function DiffLines({ lines, prefix }: { lines: string[]; prefix: "+" | "-" }) {
-  const visibleLines = lines.slice(0, 12);
-  const hiddenCount = Math.max(0, lines.length - visibleLines.length);
   return (
     <pre className={prefix === "+" ? "added-lines" : "removed-lines"}>
-      {visibleLines.map((line, index) => (
+      {lines.map((line, index) => (
         <code key={`${index}-${line}`}>
           <span>{prefix}</span>
           {line || " "}
         </code>
       ))}
-      {hiddenCount > 0 && (
-        <code>
-          <span>…</span>
-          另有 {hiddenCount} 行
-        </code>
-      )}
     </pre>
   );
 }
