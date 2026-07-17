@@ -1,8 +1,9 @@
 import { Check, Copy, FileText, GripVertical, Pin, PinOff, Save, Trash2, X } from "lucide-react";
 import { type MouseEvent as ReactMouseEvent, useEffect, useRef, useState } from "react";
 
+import { FontPicker } from "../FontPicker";
 import { highlightColors } from "../../constants";
-import type { Annotation, AppSettings, Chapter, ExportPreset, ExportTaskGoal, ExportTemplate } from "../../types";
+import type { Annotation, AppSettings, Chapter, ExportPreset, ExportTaskGoal, ExportTemplate, SystemFont } from "../../types";
 import { chapterFileName } from "../../utils/chapters";
 
 export interface SelectionDraft {
@@ -458,11 +459,13 @@ export function AnnotationDetailModal({
 export function SettingsPanel({
   closing,
   settings,
+  systemFonts,
   onChange,
   onClose,
 }: {
   closing: boolean;
   settings: AppSettings;
+  systemFonts: SystemFont[];
   onChange: (patch: Partial<AppSettings>) => void;
   onClose: () => void;
 }) {
@@ -499,15 +502,14 @@ export function SettingsPanel({
           <i aria-hidden="true" />
         </label>
 
-        <label>
-          字体
-          <select value={settings.fontFamily} onChange={(event) => onChange({ fontFamily: event.target.value })}>
-            <option value="Literata, Georgia, serif">Literata / Georgia</option>
-            <option value="'Noto Serif SC', 'Songti SC', serif">宋体阅读</option>
-            <option value="'IBM Plex Sans', 'Segoe UI', sans-serif">Plex Sans</option>
-            <option value="'JetBrains Mono', Consolas, monospace">Mono</option>
-          </select>
-        </label>
+        <FontPicker
+          label="阅读器字体"
+          description="只改变阅读器正文，不影响主页和工具栏。"
+          value={settings.readerFontFamily}
+          fallbackGeneric="serif"
+          systemFonts={systemFonts}
+          onChange={(value) => onChange({ readerFontFamily: value })}
+        />
 
         <RangeControl
           label="字号"

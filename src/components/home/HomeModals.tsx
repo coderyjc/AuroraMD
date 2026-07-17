@@ -1,4 +1,4 @@
-import { AlertTriangle, Archive, ArrowRight, BookOpen, Check, Copy, Database, Download, FileText, FolderOpen, GripVertical, Keyboard, MessageSquare, Palette, Pencil, Pin, PinOff, Plus, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
+import { AlertTriangle, Archive, ArrowRight, BookOpen, Check, Copy, Database, Download, FileText, FolderOpen, GripVertical, Keyboard, MessageSquare, Palette, Pencil, Pin, PinOff, Plus, RefreshCw, Save, Search, Trash2, Type, X } from "lucide-react";
 import { type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   deleteChapterVersion,
@@ -16,6 +16,7 @@ import {
   getThemesForSeries,
   visibleThemeSeriesOptions,
 } from "../../constants";
+import { FontPicker } from "../FontPicker";
 import { locateAnnotationInText } from "../../markdown";
 import type {
   Annotation,
@@ -34,6 +35,7 @@ import type {
   NoteItem,
   ReadChapterResponse,
   ShortcutAction,
+  SystemFont,
 } from "../../types";
 import { annotationStatusLabel } from "../../utils/annotations";
 import { chapterFileName } from "../../utils/chapters";
@@ -488,6 +490,7 @@ export function ImportBookModal({
 export function HomeSettingsModal({
   closing,
   settings,
+  systemFonts,
   exportPresets,
   busy,
   onChange,
@@ -499,6 +502,7 @@ export function HomeSettingsModal({
 }: {
   closing: boolean;
   settings: AppSettings;
+  systemFonts: SystemFont[];
   exportPresets: ExportPreset[];
   busy: boolean;
   onChange: (patch: Partial<AppSettings>) => void;
@@ -686,6 +690,30 @@ export function HomeSettingsModal({
             ))}
             </div>
           </div>
+          </div>
+        </section>
+
+        <section className="settings-section">
+          <h3>
+            <Type size={16} /> 字体
+          </h3>
+          <div className="font-setting-grid">
+            <FontPicker
+              label="主界面字体"
+              description="用于首页、标题栏、按钮、菜单和批注列表。"
+              value={settings.interfaceFontFamily}
+              fallbackGeneric="sans-serif"
+              systemFonts={systemFonts}
+              onChange={(value) => onChange({ interfaceFontFamily: value })}
+            />
+            <FontPicker
+              label="阅读器字体"
+              description="用于阅读器正文。也可以在阅读器设置里单独调整。"
+              value={settings.readerFontFamily}
+              fallbackGeneric="serif"
+              systemFonts={systemFonts}
+              onChange={(value) => onChange({ readerFontFamily: value })}
+            />
           </div>
         </section>
 

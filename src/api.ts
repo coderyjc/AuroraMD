@@ -21,6 +21,7 @@ import type {
   NoteItem,
   ReadChapterResponse,
   ReadingProgress,
+  SystemFont,
 } from "./types";
 
 export async function pickBookFolder() {
@@ -172,6 +173,10 @@ export async function getSettings() {
 
 export async function updateSettings(patch: Partial<AppSettings>) {
   return invoke<AppSettings>("update_settings", { patch });
+}
+
+export async function listSystemFonts() {
+  return invoke<SystemFont[]>("list_system_fonts");
 }
 
 export async function saveReadingProgress(

@@ -84,6 +84,8 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
             theme_series TEXT NOT NULL DEFAULT 'classic',
             theme TEXT NOT NULL,
             font_family TEXT NOT NULL,
+            interface_font_family TEXT NOT NULL DEFAULT '"IBM Plex Sans", "Segoe UI", "Microsoft YaHei", sans-serif',
+            reader_font_family TEXT NOT NULL DEFAULT 'Literata, Georgia, serif',
             font_size INTEGER NOT NULL,
             line_height REAL NOT NULL,
             content_width INTEGER NOT NULL,
@@ -173,6 +175,29 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
         "shortcut_bindings",
         "ALTER TABLE settings ADD COLUMN shortcut_bindings TEXT NOT NULL DEFAULT '{\"search\":\"Ctrl+K\",\"nextChapter\":\"N\",\"previousChapter\":\"P\",\"highlight\":\"H\",\"export\":\"E\",\"toggleLeft\":\"[\",\"toggleRight\":\"]\"}'",
     )?;
+    ensure_column(
+        &conn,
+        "settings",
+        "interface_font_family",
+        "ALTER TABLE settings ADD COLUMN interface_font_family TEXT NOT NULL DEFAULT '\"IBM Plex Sans\", \"Segoe UI\", \"Microsoft YaHei\", sans-serif'",
+    )?;
+    ensure_column(
+        &conn,
+        "settings",
+        "reader_font_family",
+        "ALTER TABLE settings ADD COLUMN reader_font_family TEXT NOT NULL DEFAULT 'Literata, Georgia, serif'",
+    )?;
+    conn.execute_batch(
+        r#"
+        UPDATE settings
+        SET reader_font_family = font_family
+        WHERE TRIM(font_family) <> ''
+          AND (
+            reader_font_family = 'Literata, Georgia, serif'
+            OR TRIM(reader_font_family) = ''
+          );
+        "#,
+    )?;
     conn.execute_batch(
         r#"
         UPDATE chapter_versions
@@ -196,6 +221,8 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
             theme_series,
             theme,
             font_family,
+            interface_font_family,
+            reader_font_family,
             font_size,
             line_height,
             content_width,
@@ -205,7 +232,7 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
             border_style,
             focus_mode,
             shortcut_bindings
-        ) VALUES (1, 100, 'classic', 'paper', 'Literata, Georgia, serif', 18, 1.72, 820, 52, 18, 'warm', 'hairline', 0, '{"search":"Ctrl+K","nextChapter":"N","previousChapter":"P","highlight":"H","export":"E","toggleLeft":"[","toggleRight":"]"}')
+        ) VALUES (1, 100, 'classic', 'paper', 'Literata, Georgia, serif', '"IBM Plex Sans", "Segoe UI", "Microsoft YaHei", sans-serif', 'Literata, Georgia, serif', 18, 1.72, 820, 52, 18, 'warm', 'hairline', 0, '{"search":"Ctrl+K","nextChapter":"N","previousChapter":"P","highlight":"H","export":"E","toggleLeft":"[","toggleRight":"]"}')
         "#,
         [],
     )?;

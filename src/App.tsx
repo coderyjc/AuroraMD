@@ -45,6 +45,7 @@ import {
   listChapters,
   listExportPresets,
   listNoteItems,
+  listSystemFonts,
   markAnnotationsStatus,
   openBookFolder,
   pickBookFolder,
@@ -116,6 +117,7 @@ import type {
   NoteItem,
   ReadChapterResponse,
   ShortcutAction,
+  SystemFont,
 } from "./types";
 import { chapterFileName } from "./utils/chapters";
 import { matchShortcut, parseShortcutBindings, shouldIgnoreShortcut } from "./utils/shortcuts";
@@ -249,6 +251,7 @@ export default function App() {
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [reader, setReader] = useState<ReadChapterResponse | null>(null);
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
+  const [systemFonts, setSystemFonts] = useState<SystemFont[]>([]);
   const [homeSettingsOpen, setHomeSettingsOpen] = useState(false);
   const [homeSettingsClosing, setHomeSettingsClosing] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -821,7 +824,8 @@ export default function App() {
   const readerStyle = useMemo(
     () =>
       ({
-        "--reader-font-family": settings.fontFamily,
+        "--interface-font-family": settings.interfaceFontFamily,
+        "--reader-font-family": settings.readerFontFamily,
         "--reader-font-size": `${settings.fontSize}px`,
         "--reader-line-height": settings.lineHeight,
         "--reader-width": `${settings.contentWidth}px`,
@@ -835,19 +839,29 @@ export default function App() {
     [chapterPaneHeight, leftPaneWidth, readerSearchPaneHeight, rightPaneWidth, settings],
   );
 
+  const homeStyle = useMemo(
+    () =>
+      ({
+        "--interface-font-family": settings.interfaceFontFamily,
+      }) as CSSProperties,
+    [settings.interfaceFontFamily],
+  );
+
   async function boot() {
     setError("");
     try {
-      const [nextBooks, nextSettings, nextNotes, nextExportPresets] = await Promise.all([
+      const [nextBooks, nextSettings, nextNotes, nextExportPresets, nextSystemFonts] = await Promise.all([
         listBooks(),
         getSettings(),
         listNoteItems(),
         listExportPresets(),
+        listSystemFonts().catch(() => []),
       ]);
       setBooks(nextBooks);
       setSettings(nextSettings);
       setNotes(nextNotes);
       setExportPresets(nextExportPresets);
+      setSystemFonts(nextSystemFonts);
     } catch (err) {
       setError(readError(err));
     }
@@ -2168,6 +2182,7 @@ export default function App() {
     return (
       <div
         className={`app-shell home-shell series-${effectiveThemeSeries} theme-${settings.theme}`}
+        style={homeStyle}
         onContextMenu={suppressNativeContextMenu}
       >
         <AppTitlebar title="AnnotaLoop" subtitle="首页" />
@@ -2343,6 +2358,7 @@ export default function App() {
           <HomeSettingsModal
             closing={homeSettingsClosing}
             settings={settings}
+            systemFonts={systemFonts}
             exportPresets={exportPresets}
             busy={busy}
             onBackupExport={() => void runBackupExport()}
@@ -2732,6 +2748,7 @@ export default function App() {
         <SettingsPanel
           closing={settingsClosing}
           settings={settings}
+          systemFonts={systemFonts}
           onChange={applySettings}
           onClose={closeReaderSettingsPanel}
         />

@@ -125,7 +125,8 @@ export interface AppSettings {
   annotationContextChars: number;
   themeSeries: string;
   theme: string;
-  fontFamily: string;
+  interfaceFontFamily: string;
+  readerFontFamily: string;
   fontSize: number;
   lineHeight: number;
   contentWidth: number;
@@ -135,6 +136,10 @@ export interface AppSettings {
   borderStyle: string;
   focusMode: boolean;
   shortcutBindings: string;
+}
+
+export interface SystemFont {
+  family: string;
 }
 
 export interface AnnotationPayload {

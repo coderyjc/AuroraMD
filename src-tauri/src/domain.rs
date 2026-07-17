@@ -205,7 +205,8 @@ pub struct AppSettings {
     pub annotation_context_chars: i64,
     pub theme_series: String,
     pub theme: String,
-    pub font_family: String,
+    pub interface_font_family: String,
+    pub reader_font_family: String,
     pub font_size: i64,
     pub line_height: f64,
     pub content_width: i64,
@@ -244,6 +245,8 @@ pub struct SettingsPatch {
     pub annotation_context_chars: Option<i64>,
     pub theme_series: Option<String>,
     pub theme: Option<String>,
+    pub interface_font_family: Option<String>,
+    pub reader_font_family: Option<String>,
     pub font_family: Option<String>,
     pub font_size: Option<i64>,
     pub line_height: Option<f64>,
@@ -254,6 +257,12 @@ pub struct SettingsPatch {
     pub border_style: Option<String>,
     pub focus_mode: Option<bool>,
     pub shortcut_bindings: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemFont {
+    pub family: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

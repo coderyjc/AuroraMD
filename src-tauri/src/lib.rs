@@ -1,5 +1,5 @@
 use rusqlite::{params, Connection, OptionalExtension};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -74,6 +74,7 @@ pub fn run() {
             restore_backup,
             get_settings,
             update_settings,
+            list_system_fonts,
             save_reading_progress,
             get_latest_reading_progress
         ])
@@ -1206,6 +1207,47 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
     } else {
         Ok(())
     };
+    let split_font_restore_result = if restore_result.is_ok()
+        && backup_has_column(&conn, "settings", "interface_font_family")?
+        && backup_has_column(&conn, "settings", "reader_font_family")?
+    {
+        conn.execute_batch(
+            r#"
+            UPDATE settings
+            SET
+                interface_font_family = (
+                    SELECT interface_font_family
+                    FROM backup.settings
+                    WHERE backup.settings.id = settings.id
+                ),
+                reader_font_family = (
+                    SELECT reader_font_family
+                    FROM backup.settings
+                    WHERE backup.settings.id = settings.id
+                ),
+                font_family = (
+                    SELECT reader_font_family
+                    FROM backup.settings
+                    WHERE backup.settings.id = settings.id
+                )
+            WHERE EXISTS (
+                SELECT 1
+                FROM backup.settings
+                WHERE backup.settings.id = settings.id
+            );
+            "#,
+        )
+    } else if restore_result.is_ok() {
+        conn.execute_batch(
+            r#"
+            UPDATE settings
+            SET reader_font_family = font_family
+            WHERE TRIM(font_family) <> '';
+            "#,
+        )
+    } else {
+        Ok(())
+    };
     let pinned_restore_result = if restore_result.is_ok()
         && backup_has_column(&conn, "books", "is_pinned")?
     {
@@ -1270,6 +1312,8 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
         .map_err(|error| format!("Failed to restore focus mode setting: {error}"))?;
     theme_series_restore_result
         .map_err(|error| format!("Failed to restore theme series setting: {error}"))?;
+    split_font_restore_result
+        .map_err(|error| format!("Failed to restore font settings: {error}"))?;
     pinned_restore_result
         .map_err(|error| format!("Failed to restore pinned books: {error}"))?;
     annotation_pinned_restore_result
@@ -1292,6 +1336,13 @@ fn get_settings(state: State<AppState>) -> AppResult<AppSettings> {
 fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<AppSettings> {
     let conn = lock_conn(&state)?;
     let current = load_settings(&conn)?;
+    let next_interface_font_family = patch
+        .interface_font_family
+        .unwrap_or(current.interface_font_family);
+    let next_reader_font_family = patch
+        .reader_font_family
+        .or(patch.font_family)
+        .unwrap_or(current.reader_font_family);
     conn.execute(
         r#"
         UPDATE settings
@@ -1299,16 +1350,18 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
             annotation_context_chars = ?1,
             theme_series = ?2,
             theme = ?3,
-            font_family = ?4,
-            font_size = ?5,
-            line_height = ?6,
-            content_width = ?7,
-            page_padding = ?8,
-            paragraph_spacing = ?9,
-            surface = ?10,
-            border_style = ?11,
-            focus_mode = ?12,
-            shortcut_bindings = ?13
+            interface_font_family = ?4,
+            reader_font_family = ?5,
+            font_family = ?5,
+            font_size = ?6,
+            line_height = ?7,
+            content_width = ?8,
+            page_padding = ?9,
+            paragraph_spacing = ?10,
+            surface = ?11,
+            border_style = ?12,
+            focus_mode = ?13,
+            shortcut_bindings = ?14
         WHERE id = 1
         "#,
         params![
@@ -1317,7 +1370,8 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
                 .unwrap_or(current.annotation_context_chars),
             patch.theme_series.unwrap_or(current.theme_series),
             patch.theme.unwrap_or(current.theme),
-            patch.font_family.unwrap_or(current.font_family),
+            next_interface_font_family,
+            next_reader_font_family,
             patch.font_size.unwrap_or(current.font_size),
             patch.line_height.unwrap_or(current.line_height),
             patch.content_width.unwrap_or(current.content_width),
@@ -1331,6 +1385,11 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
     )
     .map_err(|error| format!("Failed to update settings: {error}"))?;
     load_settings(&conn)
+}
+
+#[tauri::command]
+fn list_system_fonts() -> AppResult<Vec<SystemFont>> {
+    collect_system_fonts()
 }
 
 #[tauri::command]
@@ -2057,7 +2116,8 @@ fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
             annotation_context_chars,
             theme_series,
             theme,
-            font_family,
+            interface_font_family,
+            reader_font_family,
             font_size,
             line_height,
             content_width,
@@ -2076,20 +2136,114 @@ fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
                 annotation_context_chars: row.get(0)?,
                 theme_series: row.get(1)?,
                 theme: row.get(2)?,
-                font_family: row.get(3)?,
-                font_size: row.get(4)?,
-                line_height: row.get(5)?,
-                content_width: row.get(6)?,
-                page_padding: row.get(7)?,
-                paragraph_spacing: row.get(8)?,
-                surface: row.get(9)?,
-                border_style: row.get(10)?,
-                focus_mode: row.get(11)?,
-                shortcut_bindings: row.get(12)?,
+                interface_font_family: row.get(3)?,
+                reader_font_family: row.get(4)?,
+                font_size: row.get(5)?,
+                line_height: row.get(6)?,
+                content_width: row.get(7)?,
+                page_padding: row.get(8)?,
+                paragraph_spacing: row.get(9)?,
+                surface: row.get(10)?,
+                border_style: row.get(11)?,
+                focus_mode: row.get(12)?,
+                shortcut_bindings: row.get(13)?,
             })
         },
     )
     .map_err(db_error)
+}
+
+fn collect_system_fonts() -> AppResult<Vec<SystemFont>> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+
+        let script = r#"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+$ErrorActionPreference = 'SilentlyContinue'
+$names = New-Object System.Collections.Generic.List[string]
+$usedRegistryFallback = $false
+try {
+  Add-Type -AssemblyName System.Drawing
+  $collection = New-Object System.Drawing.Text.InstalledFontCollection
+  foreach ($family in $collection.Families) {
+    if ($family.Name) { $names.Add($family.Name) }
+  }
+} catch {}
+if ($names.Count -eq 0) {
+  $usedRegistryFallback = $true
+  $registryPaths = @(
+    'Registry::HKEY_CURRENT_USER\Software\Microsoft\Windows NT\CurrentVersion\Fonts',
+    'Registry::HKEY_LOCAL_MACHINE\Software\Microsoft\Windows NT\CurrentVersion\Fonts'
+  )
+  foreach ($path in $registryPaths) {
+    if (Test-Path $path) {
+      $item = Get-ItemProperty -Path $path
+      foreach ($property in $item.PSObject.Properties) {
+        if ($property.Name -notlike 'PS*') { $names.Add($property.Name) }
+      }
+    }
+  }
+}
+$stylePattern = '\s+(Regular|Italic|Bold|Bold Italic|Light|ExtraLight|SemiLight|Medium|SemiBold|DemiBold|ExtraBold|Black|Thin|Heavy|Condensed|Narrow|Oblique)$'
+$names |
+  ForEach-Object {
+    $clean = $_ -replace '\s*\((TrueType|OpenType|Type 1|Raster|Vector)\)\s*$', ''
+    if ($usedRegistryFallback) { $clean = $clean -replace $stylePattern, '' }
+    $clean
+  } |
+  Where-Object { $_ -and $_.Trim().Length -gt 0 } |
+  Sort-Object -Unique |
+  ForEach-Object { [Console]::Out.WriteLine($_.Trim()) }
+"#;
+
+        let output = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-Command", script])
+            .creation_flags(0x08000000)
+            .output()
+            .map_err(|error| format!("Failed to read system fonts: {error}"))?;
+
+        if !output.status.success() {
+            return Err(format!(
+                "Failed to read system fonts: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        return Ok(normalize_system_fonts(
+            String::from_utf8_lossy(&output.stdout).lines(),
+        ));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(normalize_system_fonts([
+            "Arial",
+            "Georgia",
+            "Helvetica",
+            "Times New Roman",
+            "Verdana",
+        ]))
+    }
+}
+
+fn normalize_system_fonts<'a, I>(font_names: I) -> Vec<SystemFont>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let mut families = BTreeSet::new();
+    for name in font_names {
+        let family = name.trim();
+        if !family.is_empty() {
+            families.insert(family.to_string());
+        }
+    }
+
+    families
+        .into_iter()
+        .map(|family| SystemFont { family })
+        .collect()
 }
 
 fn map_book(row: &rusqlite::Row<'_>) -> rusqlite::Result<Book> {
