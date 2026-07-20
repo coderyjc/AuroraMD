@@ -6538,6 +6538,7 @@ body.version-sidebar-resize-active * {
 
 .settings-toggle {
   position: relative;
+  display: grid;
   grid-template-columns: minmax(0, 1fr) 48px;
   align-items: center;
   gap: 14px;
@@ -6596,6 +6597,50 @@ body.version-sidebar-resize-active * {
 .settings-toggle input:checked + i::after {
   transform: translateX(20px);
   background: var(--accent);
+}
+
+.open-source-section {
+  padding-bottom: 2px;
+}
+
+.open-source-card {
+  display: flex;
+  width: 100%;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--paper-strong) 76%, transparent);
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  padding: 12px;
+  text-decoration: none;
+  transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
+}
+
+.open-source-card:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, var(--paper-strong));
+  color: var(--accent);
+}
+
+.open-source-card span {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.open-source-card small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.open-source-card svg {
+  flex: 0 0 auto;
 }
 
 .settings-panel input[type="range"] {

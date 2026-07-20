@@ -223,6 +223,7 @@ pub struct AppSettings {
     pub surface: String,
     pub border_style: String,
     pub focus_mode: bool,
+    pub slide_annotate: bool,
     pub shortcut_bindings: String,
 }
 
@@ -264,6 +265,7 @@ pub struct SettingsPatch {
     pub surface: Option<String>,
     pub border_style: Option<String>,
     pub focus_mode: Option<bool>,
+    pub slide_annotate: Option<bool>,
     pub shortcut_bindings: Option<String>,
 }
 

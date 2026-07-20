@@ -30,6 +30,7 @@ const INITIAL_WINDOW_MIN_WIDTH: u32 = 980;
 const INITIAL_WINDOW_MIN_HEIGHT: u32 = 680;
 const INITIAL_WINDOW_MIN_RESTORED_SIZE: u32 = 360;
 const INITIAL_WINDOW_EDGE_PADDING: u32 = 32;
+const PROJECT_REPOSITORY_URL: &str = "https://github.com/coderyjc/AuroraMD";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -62,6 +63,7 @@ pub fn run() {
             delete_book,
             open_book_folder,
             open_chapter_in_explorer,
+            open_project_repository,
             sync_book_folder,
             list_chapters,
             reorder_chapters,
@@ -327,6 +329,38 @@ fn open_file_location(path: &PathBuf) -> AppResult<()> {
             .arg(parent)
             .spawn()
             .map_err(|error| format!("Failed to open chapter folder: {error}"))?;
+        Ok(())
+    }
+}
+
+fn open_external_url(url: &str) -> AppResult<()> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+
+        std::process::Command::new("cmd.exe")
+            .args(["/C", "start", "", url])
+            .creation_flags(0x08000000)
+            .spawn()
+            .map_err(|error| format!("Failed to open external link: {error}"))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(url)
+            .spawn()
+            .map_err(|error| format!("Failed to open external link: {error}"))?;
+        return Ok(());
+    }
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .map_err(|error| format!("Failed to open external link: {error}"))?;
         Ok(())
     }
 }
@@ -835,6 +869,11 @@ fn open_chapter_in_explorer(chapter_id: String, state: State<AppState>) -> AppRe
     drop(conn);
 
     open_file_location(&PathBuf::from(&chapter.file_path))
+}
+
+#[tauri::command]
+fn open_project_repository() -> AppResult<()> {
+    open_external_url(PROJECT_REPOSITORY_URL)
 }
 
 #[tauri::command]
@@ -1625,6 +1664,26 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
         } else {
             Ok(())
         };
+    let slide_annotate_restore_result =
+        if restore_result.is_ok() && backup_has_column(&conn, "settings", "slide_annotate")? {
+            conn.execute_batch(
+                r#"
+            UPDATE settings
+            SET slide_annotate = (
+                SELECT slide_annotate
+                FROM backup.settings
+                WHERE backup.settings.id = settings.id
+            )
+            WHERE EXISTS (
+                SELECT 1
+                FROM backup.settings
+                WHERE backup.settings.id = settings.id
+            );
+            "#,
+            )
+        } else {
+            Ok(())
+        };
     let theme_series_restore_result =
         if restore_result.is_ok() && backup_has_column(&conn, "settings", "theme_series")? {
             conn.execute_batch(
@@ -1747,6 +1806,8 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
         .map_err(|error| format!("Failed to restore annotation anchors: {error}"))?;
     focus_mode_restore_result
         .map_err(|error| format!("Failed to restore focus mode setting: {error}"))?;
+    slide_annotate_restore_result
+        .map_err(|error| format!("Failed to restore slide annotation setting: {error}"))?;
     theme_series_restore_result
         .map_err(|error| format!("Failed to restore theme series setting: {error}"))?;
     split_font_restore_result
@@ -1797,7 +1858,8 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
             surface = ?11,
             border_style = ?12,
             focus_mode = ?13,
-            shortcut_bindings = ?14
+            slide_annotate = ?14,
+            shortcut_bindings = ?15
         WHERE id = 1
         "#,
         params![
@@ -1816,6 +1878,7 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
             patch.surface.unwrap_or(current.surface),
             patch.border_style.unwrap_or(current.border_style),
             patch.focus_mode.unwrap_or(current.focus_mode),
+            patch.slide_annotate.unwrap_or(current.slide_annotate),
             patch.shortcut_bindings.unwrap_or(current.shortcut_bindings)
         ],
     )
@@ -2634,6 +2697,7 @@ fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
             surface,
             border_style,
             focus_mode,
+            slide_annotate,
             shortcut_bindings
         FROM settings
         WHERE id = 1
@@ -2654,7 +2718,8 @@ fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
                 surface: row.get(10)?,
                 border_style: row.get(11)?,
                 focus_mode: row.get(12)?,
-                shortcut_bindings: row.get(13)?,
+                slide_annotate: row.get(13)?,
+                shortcut_bindings: row.get(14)?,
             })
         },
     )

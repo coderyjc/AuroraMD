@@ -56,6 +56,7 @@ import {
   openBookFolder,
   openChapterInExplorer,
   openMarkdownFile,
+  openProjectRepository,
   pickBookFolder,
   previewImportBookFolder,
   readChapter,
@@ -314,6 +315,7 @@ export default function App() {
   const [pendingDraft, setPendingDraft] = useState<SelectionDraft | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [contextMenuClosing, setContextMenuClosing] = useState(false);
+  const selectionMenuCloseTokenRef = useRef(0);
   const [annotationMenu, setAnnotationMenu] = useState<AnnotationMenuState | null>(null);
   const [annotationMenuClosing, setAnnotationMenuClosing] = useState(false);
   const [chapterMenu, setChapterMenu] = useState<ChapterMenuState | null>(null);
@@ -623,10 +625,10 @@ export default function App() {
   useEffect(() => {
     if (!contextMenu) return;
     const close = () => closeSelectionContextMenu();
-    window.addEventListener("click", close);
+    window.addEventListener("pointerdown", close);
     window.addEventListener("scroll", close, true);
     return () => {
-      window.removeEventListener("click", close);
+      window.removeEventListener("pointerdown", close);
       window.removeEventListener("scroll", close, true);
     };
   }, [contextMenu]);
@@ -1455,10 +1457,15 @@ export default function App() {
     }
   }
 
-  function handleTextSelection() {
+  function handleTextSelection(event: ReactMouseEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
     const nextDraft = buildDraftFromSelection(false);
     setPendingDraft(nextDraft);
-    closeSelectionContextMenu();
+    if (!settings.slideAnnotate || !nextDraft) {
+      closeSelectionContextMenu();
+      return;
+    }
+    openSelectionContextMenu(getSelectionMenuPosition(event));
   }
 
   function handleReaderContextMenu(event: React.MouseEvent<HTMLDivElement>) {
@@ -1470,11 +1477,28 @@ export default function App() {
       return;
     }
     setPendingDraft(nextDraft);
-    setContextMenuClosing(false);
-    setContextMenu({
+    openSelectionContextMenu({
       x: Math.min(event.clientX, window.innerWidth - 156),
       y: Math.min(event.clientY, window.innerHeight - 56),
     });
+  }
+
+  function getSelectionMenuPosition(event: ReactMouseEvent<HTMLDivElement>) {
+    const menuWidth = 156;
+    const menuHeight = 56;
+    const edgePadding = 12;
+    const selection = window.getSelection();
+    const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+    const rect = range?.getBoundingClientRect();
+    const hasSelectionRect = rect && (rect.width > 0 || rect.height > 0);
+    const rawX = hasSelectionRect ? rect.left + rect.width / 2 - menuWidth / 2 : event.clientX;
+    const rawY = hasSelectionRect ? rect.top - menuHeight - 8 : event.clientY + 10;
+    const fallbackY = hasSelectionRect && rawY < edgePadding ? rect.bottom + 8 : rawY;
+
+    return {
+      x: clamp(Math.round(rawX), edgePadding, window.innerWidth - menuWidth - edgePadding),
+      y: clamp(Math.round(fallbackY), edgePadding, window.innerHeight - menuHeight - edgePadding),
+    };
   }
 
   function suppressNativeContextMenu(event: React.MouseEvent) {
@@ -1778,6 +1802,14 @@ export default function App() {
     void updateSettings(patch)
       .then(setSettings)
       .catch((err) => setError(readError(err)));
+  }
+
+  async function openRepositoryLink() {
+    try {
+      await openProjectRepository();
+    } catch (err) {
+      setError(readError(err));
+    }
   }
 
   function startReaderColumnResize(
@@ -2302,9 +2334,22 @@ export default function App() {
     animateClose(setBookMenuClosing, () => setBookMenu(null));
   }
 
+  function openSelectionContextMenu(position: ContextMenuState) {
+    selectionMenuCloseTokenRef.current += 1;
+    setContextMenuClosing(false);
+    setContextMenu(position);
+  }
+
   function closeSelectionContextMenu() {
     if (!contextMenu) return;
-    animateClose(setContextMenuClosing, () => setContextMenu(null));
+    const closeToken = selectionMenuCloseTokenRef.current + 1;
+    selectionMenuCloseTokenRef.current = closeToken;
+    setContextMenuClosing(true);
+    window.setTimeout(() => {
+      if (selectionMenuCloseTokenRef.current !== closeToken) return;
+      setContextMenu(null);
+      setContextMenuClosing(false);
+    }, uiExitMs);
   }
 
   function closeAnnotationMenu() {
@@ -2750,6 +2795,7 @@ export default function App() {
             onChange={applySettings}
             onSaveExportPreset={saveExportPreset}
             onDeleteExportPreset={removeExportPreset}
+            onOpenRepository={() => void openRepositoryLink()}
             onClose={closeHomeSettingsModal}
           />
         )}
@@ -3196,6 +3242,7 @@ export default function App() {
         <div
           className={`selection-menu ${contextMenuClosing ? "is-closing" : ""}`}
           style={{ left: contextMenu.x, top: contextMenu.y }}
+          onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => event.stopPropagation()}
         >
           <button onClick={openPendingDraft}>
@@ -3311,6 +3358,7 @@ function translateErrorMessage(message: string) {
     ["Failed to restore backup:", "恢复备份失败："],
     ["Failed to restore annotation anchors:", "恢复批注锚点失败："],
     ["Failed to restore focus mode setting:", "恢复聚焦模式设置失败："],
+    ["Failed to restore slide annotation setting:", "恢复划动批注设置失败："],
     ["Failed to restore theme series setting:", "恢复主题系列设置失败："],
     ["Failed to restore pinned books:", "恢复置顶书籍失败："],
     ["Failed to restore pinned annotations:", "恢复置顶批注失败："],

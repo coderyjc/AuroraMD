@@ -141,6 +141,7 @@ export interface AppSettings {
   surface: string;
   borderStyle: string;
   focusMode: boolean;
+  slideAnnotate: boolean;
   shortcutBindings: string;
 }
 

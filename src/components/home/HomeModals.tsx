@@ -1,4 +1,4 @@
-import { AlertTriangle, Archive, ArrowRight, BookOpen, Check, Copy, Database, Download, FileText, FolderOpen, GripVertical, Keyboard, MessageSquare, Palette, Pencil, Pin, PinOff, Plus, RefreshCw, Save, Search, Trash2, Type, Upload, X } from "lucide-react";
+import { AlertTriangle, Archive, ArrowRight, BookOpen, Check, Copy, Database, Download, FileText, FolderOpen, Github, GripVertical, Keyboard, MessageSquare, Palette, Pencil, Pin, PinOff, Plus, RefreshCw, Save, Search, Trash2, Type, Upload, X } from "lucide-react";
 import { type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   deleteChapter,
@@ -687,6 +687,7 @@ export function HomeSettingsModal({
   onBackupRestore,
   onSaveExportPreset,
   onDeleteExportPreset,
+  onOpenRepository,
   onClose,
 }: {
   closing: boolean;
@@ -702,6 +703,7 @@ export function HomeSettingsModal({
     payload: ExportPresetPayload,
   ) => Promise<ExportPreset>;
   onDeleteExportPreset: (presetId: string) => Promise<void>;
+  onOpenRepository: () => void;
   onClose: () => void;
 }) {
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
@@ -908,6 +910,24 @@ export function HomeSettingsModal({
 
         <section className="settings-section">
           <h3>
+            <MessageSquare size={16} /> 阅读批注
+          </h3>
+          <label className="settings-toggle">
+            <span>
+              <strong>划动批注</strong>
+              <small>开启后，在阅读器中用鼠标选中文字会直接浮现“添加批注”。</small>
+            </span>
+            <input
+              type="checkbox"
+              checked={settings.slideAnnotate}
+              onChange={(event) => onChange({ slideAnnotate: event.target.checked })}
+            />
+            <i aria-hidden="true" />
+          </label>
+        </section>
+
+        <section className="settings-section">
+          <h3>
             <Keyboard size={16} /> 快捷键
           </h3>
           <div className="shortcut-grid">
@@ -1040,6 +1060,23 @@ export function HomeSettingsModal({
               <Archive size={16} /> 恢复备份
             </button>
           </div>
+        </section>
+
+        <section className="settings-section open-source-section">
+          <h3>
+            <Github size={16} /> 开源信息
+          </h3>
+          <button
+            type="button"
+            className="open-source-card"
+            onClick={onOpenRepository}
+          >
+            <span>
+              <strong>coderyjc/AuroraMD</strong>
+              <small>GitHub 开源地址</small>
+            </span>
+            <ArrowRight size={16} />
+          </button>
         </section>
       </section>
     </div>

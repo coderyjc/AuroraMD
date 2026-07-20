@@ -82,6 +82,10 @@ export async function openChapterInExplorer(chapterId: string) {
   return invoke<void>("open_chapter_in_explorer", { chapterId });
 }
 
+export async function openProjectRepository() {
+  return invoke<void>("open_project_repository");
+}
+
 export async function syncBookFolder(bookId: string) {
   return invoke<FolderSyncReport>("sync_book_folder", { bookId });
 }

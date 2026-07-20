@@ -94,6 +94,7 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
             surface TEXT NOT NULL,
             border_style TEXT NOT NULL,
             focus_mode INTEGER NOT NULL DEFAULT 0,
+            slide_annotate INTEGER NOT NULL DEFAULT 0,
             shortcut_bindings TEXT NOT NULL
         );
 
@@ -172,6 +173,12 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
     ensure_column(
         &conn,
         "settings",
+        "slide_annotate",
+        "ALTER TABLE settings ADD COLUMN slide_annotate INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(
+        &conn,
+        "settings",
         "shortcut_bindings",
         "ALTER TABLE settings ADD COLUMN shortcut_bindings TEXT NOT NULL DEFAULT '{\"search\":\"Ctrl+K\",\"nextChapter\":\"N\",\"previousChapter\":\"P\",\"highlight\":\"H\",\"export\":\"E\",\"toggleLeft\":\"[\",\"toggleRight\":\"]\"}'",
     )?;
@@ -231,8 +238,9 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
             surface,
             border_style,
             focus_mode,
+            slide_annotate,
             shortcut_bindings
-        ) VALUES (1, 100, 'classic', 'paper', 'Literata, Georgia, serif', '"IBM Plex Sans", "Segoe UI", "Microsoft YaHei", sans-serif', 'Literata, Georgia, serif', 18, 1.72, 820, 52, 18, 'warm', 'hairline', 0, '{"search":"Ctrl+K","nextChapter":"N","previousChapter":"P","highlight":"H","export":"E","toggleLeft":"[","toggleRight":"]"}')
+        ) VALUES (1, 100, 'classic', 'paper', 'Literata, Georgia, serif', '"IBM Plex Sans", "Segoe UI", "Microsoft YaHei", sans-serif', 'Literata, Georgia, serif', 18, 1.72, 820, 52, 18, 'warm', 'hairline', 0, 0, '{"search":"Ctrl+K","nextChapter":"N","previousChapter":"P","highlight":"H","export":"E","toggleLeft":"[","toggleRight":"]"}')
         "#,
         [],
     )?;

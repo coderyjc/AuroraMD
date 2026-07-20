@@ -671,5 +671,6 @@ export const defaultSettings: AppSettings = {
   surface: "warm",
   borderStyle: "hairline",
   focusMode: false,
+  slideAnnotate: false,
   shortcutBindings: JSON.stringify(defaultShortcutBindings),
 };
