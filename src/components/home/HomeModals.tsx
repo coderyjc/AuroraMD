@@ -79,6 +79,8 @@ interface VersionDiffResult {
   annotationChecks: AnnotationLocationCheck[];
 }
 
+type HomeSettingsCategory = "appearance" | "features" | "shortcuts" | "prompts" | "backup" | "about";
+
 interface AnnotationLocationCheck {
   annotation: Annotation;
   located: boolean;
@@ -709,7 +711,53 @@ export function HomeSettingsModal({
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
   const [presetDraft, setPresetDraft] = useState<ExportPresetPayload>(emptyExportPresetDraft);
   const [recordingAction, setRecordingAction] = useState<ShortcutAction | null>(null);
+  const [activeCategory, setActiveCategory] = useState<HomeSettingsCategory>("appearance");
   const bindings = parseShortcutBindings(settings.shortcutBindings);
+  const settingsCategories = [
+    {
+      id: "appearance",
+      label: "外观",
+      description: "主题、字体",
+      icon: <Palette size={16} />,
+    },
+    {
+      id: "features",
+      label: "功能",
+      description: "阅读批注",
+      icon: <MessageSquare size={16} />,
+    },
+    {
+      id: "shortcuts",
+      label: "快捷键",
+      description: "键盘操作",
+      icon: <Keyboard size={16} />,
+    },
+    {
+      id: "prompts",
+      label: "Prompt 预设",
+      description: "导出模板",
+      icon: <FileText size={16} />,
+    },
+    {
+      id: "backup",
+      label: "数据备份",
+      description: "导出、恢复",
+      icon: <Database size={16} />,
+    },
+    {
+      id: "about",
+      label: "关于",
+      description: "版本、开源",
+      icon: <Github size={16} />,
+    },
+  ] satisfies Array<{
+    id: HomeSettingsCategory;
+    label: string;
+    description: string;
+    icon: JSX.Element;
+  }>;
+  const activeCategoryLabel =
+    settingsCategories.find((category) => category.id === activeCategory)?.label ?? "外观";
   const updateBinding = (action: ShortcutAction, value: string) => {
     onChange({ shortcutBindings: JSON.stringify({ ...bindings, [action]: value.trim() }) });
   };
@@ -809,275 +857,331 @@ export function HomeSettingsModal({
           </button>
         </header>
 
-        <section className="settings-section">
-          <h3>
-            <Palette size={16} /> 主题
-          </h3>
-          <div className="theme-picker-layout">
-          <aside className="theme-series-list" aria-label="主题系列">
-            {visibleThemeSeriesOptions.map((series) => (
+        <div className="home-settings-layout">
+          <aside className="home-settings-nav" aria-label="设置分类">
+            {settingsCategories.map((category) => (
               <button
-                key={series.id}
+                key={category.id}
                 type="button"
-                className={`theme-choice series-choice ${
-                  activeThemeSeries === series.id ? "active" : ""
-                }`}
-                onClick={() =>
-                  onChange({
-                    themeSeries: series.id,
-                    theme: getDefaultThemeForSeries(series.id),
-                  })
-                }
+                className={activeCategory === category.id ? "active" : ""}
+                onClick={() => setActiveCategory(category.id)}
               >
-                <span
-                  className="theme-preview series-preview"
-                  style={{
-                    background: series.previewBg,
-                    color: series.previewInk,
-                    borderColor: series.accent,
-                  }}
-                >
-                  <i style={{ background: series.accent }} />
-                  <i />
-                </span>
+                {category.icon}
                 <span>
-                  <strong>{series.label}</strong>
-                  <small>{series.description}</small>
+                  <strong>{category.label}</strong>
+                  <small>{category.description}</small>
                 </span>
-                {activeThemeSeries === series.id && <Check size={15} />}
               </button>
             ))}
           </aside>
-          <div className="theme-skin-panel">
-            <div className="theme-skin-heading">
-              <strong>{activeSeriesOption.label}</strong>
-              <small>{activeSeriesOption.description}</small>
-            </div>
-            <div className="theme-choice-grid theme-skin-grid">
-            {availableThemes.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                className={`theme-choice ${settings.theme === option.value ? "active" : ""}`}
-                onClick={() => onChange({ theme: option.value })}
-              >
-                <span
-                  className="theme-preview"
-                  style={{
-                    background: option.previewBg,
-                    color: option.previewInk,
-                    borderColor: option.accent,
-                  }}
-                >
-                  <i style={{ background: option.accent }} />
-                  <i />
-                </span>
-                <span>
-                  <strong>{option.label}</strong>
-                  <small>{option.description}</small>
-                </span>
-                {settings.theme === option.value && <Check size={15} />}
-              </button>
-            ))}
-            </div>
-          </div>
-          </div>
-        </section>
 
-        <section className="settings-section">
-          <h3>
-            <Type size={16} /> 字体
-          </h3>
-          <div className="font-setting-grid">
-            <FontPicker
-              label="主界面字体"
-              description="用于首页、标题栏、按钮、菜单和批注列表。"
-              value={settings.interfaceFontFamily}
-              fallbackGeneric="sans-serif"
-              systemFonts={systemFonts}
-              onChange={(value) => onChange({ interfaceFontFamily: value })}
-            />
-            <FontPicker
-              label="阅读器字体"
-              description="用于阅读器正文。也可以在阅读器设置里单独调整。"
-              value={settings.readerFontFamily}
-              fallbackGeneric="serif"
-              systemFonts={systemFonts}
-              onChange={(value) => onChange({ readerFontFamily: value })}
-            />
-          </div>
-        </section>
+          <main className="home-settings-content" aria-label={activeCategoryLabel}>
+            {activeCategory === "appearance" && (
+              <div className="settings-pane">
+                <section className="settings-section">
+                  <h3>
+                    <Palette size={16} /> 主题
+                  </h3>
+                  <div className="theme-picker-layout">
+                    <aside className="theme-series-list" aria-label="主题系列">
+                      {visibleThemeSeriesOptions.map((series) => (
+                        <button
+                          key={series.id}
+                          type="button"
+                          className={`theme-choice series-choice ${
+                            activeThemeSeries === series.id ? "active" : ""
+                          }`}
+                          onClick={() =>
+                            onChange({
+                              themeSeries: series.id,
+                              theme: getDefaultThemeForSeries(series.id),
+                            })
+                          }
+                        >
+                          <span
+                            className="theme-preview series-preview"
+                            style={{
+                              background: series.previewBg,
+                              color: series.previewInk,
+                              borderColor: series.accent,
+                            }}
+                          >
+                            <i style={{ background: series.accent }} />
+                            <i />
+                          </span>
+                          <span>
+                            <strong>{series.label}</strong>
+                            <small>{series.description}</small>
+                          </span>
+                          {activeThemeSeries === series.id && <Check size={15} />}
+                        </button>
+                      ))}
+                    </aside>
+                    <div className="theme-skin-panel">
+                      <div className="theme-skin-heading">
+                        <strong>{activeSeriesOption.label}</strong>
+                        <small>{activeSeriesOption.description}</small>
+                      </div>
+                      <div className="theme-choice-grid theme-skin-grid">
+                        {availableThemes.map((option) => (
+                          <button
+                            key={option.value}
+                            type="button"
+                            className={`theme-choice ${settings.theme === option.value ? "active" : ""}`}
+                            onClick={() => onChange({ theme: option.value })}
+                          >
+                            <span
+                              className="theme-preview"
+                              style={{
+                                background: option.previewBg,
+                                color: option.previewInk,
+                                borderColor: option.accent,
+                              }}
+                            >
+                              <i style={{ background: option.accent }} />
+                              <i />
+                            </span>
+                            <span>
+                              <strong>{option.label}</strong>
+                              <small>{option.description}</small>
+                            </span>
+                            {settings.theme === option.value && <Check size={15} />}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </section>
 
-        <section className="settings-section">
-          <h3>
-            <MessageSquare size={16} /> 阅读批注
-          </h3>
-          <label className="settings-toggle">
-            <span>
-              <strong>划动批注</strong>
-              <small>开启后，在阅读器中用鼠标选中文字会直接浮现“添加批注”。</small>
-            </span>
-            <input
-              type="checkbox"
-              checked={settings.slideAnnotate}
-              onChange={(event) => onChange({ slideAnnotate: event.target.checked })}
-            />
-            <i aria-hidden="true" />
-          </label>
-        </section>
-
-        <section className="settings-section">
-          <h3>
-            <Keyboard size={16} /> 快捷键
-          </h3>
-          <div className="shortcut-grid">
-            {(Object.keys(defaultShortcutBindings) as ShortcutAction[]).map((action) => (
-              <div className="shortcut-field" key={action}>
-                <span>{shortcutActionLabel(action)}</span>
-                <button
-                  type="button"
-                  className={`shortcut-capture ${recordingAction === action ? "recording" : ""}`}
-                  onClick={() => setRecordingAction(action)}
-                  onKeyDown={(event) => captureBinding(action, event)}
-                  onBlur={() =>
-                    setRecordingAction((current) => (current === action ? null : current))
-                  }
-                >
-                  {recordingAction === action ? "按下新的快捷键" : bindings[action] || "未设置"}
-                </button>
+                <section className="settings-section">
+                  <h3>
+                    <Type size={16} /> 字体
+                  </h3>
+                  <div className="font-setting-grid">
+                    <FontPicker
+                      label="主界面字体"
+                      description="用于首页、标题栏、按钮、菜单和批注列表。"
+                      value={settings.interfaceFontFamily}
+                      fallbackGeneric="sans-serif"
+                      systemFonts={systemFonts}
+                      onChange={(value) => onChange({ interfaceFontFamily: value })}
+                    />
+                    <FontPicker
+                      label="阅读器字体"
+                      description="用于阅读器正文。也可以在阅读器设置里单独调整。"
+                      value={settings.readerFontFamily}
+                      fallbackGeneric="serif"
+                      systemFonts={systemFonts}
+                      onChange={(value) => onChange({ readerFontFamily: value })}
+                    />
+                  </div>
+                </section>
               </div>
-            ))}
-          </div>
-          <p className="muted">点击快捷键框后按下新的组合键。按 Esc 可取消，冲突时后面的动作可能不会触发。</p>
-        </section>
+            )}
 
-        <section className="settings-section">
-          <h3>
-            <FileText size={16} /> 导出 Prompt 预设
-          </h3>
-          <div className="prompt-preset-manager">
-            <aside className="prompt-preset-list">
-              <button
-                className={!editingPresetId ? "active" : ""}
-                onClick={startNewPreset}
-              >
-                <Plus size={15} /> 新建预设
-              </button>
-              {exportPresets.map((preset) => (
-                <button
-                  key={preset.id}
-                  className={preset.id === editingPresetId ? "active" : ""}
-                  onClick={() => selectPreset(preset)}
-                >
-                  <span>{preset.name}</span>
-                  <small>{exportTemplateLabels[preset.baseTemplateId]}</small>
-                </button>
-              ))}
-            </aside>
-            <div className="prompt-preset-editor">
-              <div className="preset-editor-heading">
-                <strong>{selectedPreset ? "编辑预设" : "新建预设"}</strong>
-                {selectedPreset && <small>{new Date(selectedPreset.updatedAt).toLocaleString()}</small>}
+            {activeCategory === "features" && (
+              <div className="settings-pane">
+                <section className="settings-section">
+                  <h3>
+                    <MessageSquare size={16} /> 阅读批注
+                  </h3>
+                  <label className="settings-toggle">
+                    <span>
+                      <strong>划动批注</strong>
+                      <small>开启后，在阅读器中用鼠标选中文字会直接浮现“添加批注”。</small>
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={settings.slideAnnotate}
+                      onChange={(event) => onChange({ slideAnnotate: event.target.checked })}
+                    />
+                    <i aria-hidden="true" />
+                  </label>
+                </section>
               </div>
-              <label className="modal-field">
-                预设名称
-                <input
-                  value={presetDraft.name}
-                  onChange={(event) =>
-                    setPresetDraft({ ...presetDraft, name: event.target.value })
-                  }
-                  placeholder="例如 发给 GPT 修改整章"
-                />
-              </label>
-              <label className="modal-field">
-                正文结构
-                <select
-                  value={presetDraft.baseTemplateId}
-                  onChange={(event) =>
-                    setPresetDraft({
-                      ...presetDraft,
-                      baseTemplateId: event.target.value as ExportTemplate,
-                    })
-                  }
-                >
-                  {(Object.keys(exportTemplateLabels) as ExportTemplate[]).map((templateId) => (
-                    <option key={templateId} value={templateId}>
-                      {exportTemplateLabels[templateId]}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="modal-field">
-                系统提示词
-                <textarea
-                  value={presetDraft.systemPrompt}
-                  onChange={(event) =>
-                    setPresetDraft({ ...presetDraft, systemPrompt: event.target.value })
-                  }
-                />
-              </label>
-              <label className="modal-field">
-                任务提示词
-                <textarea
-                  value={presetDraft.taskPrompt}
-                  onChange={(event) =>
-                    setPresetDraft({ ...presetDraft, taskPrompt: event.target.value })
-                  }
-                />
-              </label>
-              <div className="modal-actions preset-editor-actions">
-                <button onClick={startNewPreset}>
-                  <Plus size={16} /> 新建
-                </button>
-                <button
-                  className="danger"
-                  onClick={() => void deletePreset()}
-                  disabled={busy || !editingPresetId}
-                >
-                  <Trash2 size={16} /> 删除
-                </button>
-                <button
-                  className="primary-button"
-                  onClick={() => void savePreset()}
-                  disabled={busy || !presetDraft.name.trim()}
-                >
-                  <Save size={16} /> 保存预设
-                </button>
+            )}
+
+            {activeCategory === "shortcuts" && (
+              <div className="settings-pane">
+                <section className="settings-section">
+                  <h3>
+                    <Keyboard size={16} /> 快捷键
+                  </h3>
+                  <div className="shortcut-grid">
+                    {(Object.keys(defaultShortcutBindings) as ShortcutAction[]).map((action) => (
+                      <div className="shortcut-field" key={action}>
+                        <span>{shortcutActionLabel(action)}</span>
+                        <button
+                          type="button"
+                          className={`shortcut-capture ${recordingAction === action ? "recording" : ""}`}
+                          onClick={() => setRecordingAction(action)}
+                          onKeyDown={(event) => captureBinding(action, event)}
+                          onBlur={() =>
+                            setRecordingAction((current) => (current === action ? null : current))
+                          }
+                        >
+                          {recordingAction === action ? "按下新的快捷键" : bindings[action] || "未设置"}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="muted">点击快捷键框后按下新的组合键。按 Esc 可取消，冲突时后面的动作可能不会触发。</p>
+                </section>
               </div>
-            </div>
-          </div>
-        </section>
+            )}
 
-        <section className="settings-section">
-          <h3>
-            <Database size={16} /> 本地备份 / 数据迁移
-          </h3>
-          <div className="backup-actions">
-            <button onClick={onBackupExport} disabled={busy}>
-              <Download size={16} /> 导出备份
-            </button>
-            <button onClick={onBackupRestore} disabled={busy}>
-              <Archive size={16} /> 恢复备份
-            </button>
-          </div>
-        </section>
+            {activeCategory === "prompts" && (
+              <div className="settings-pane">
+                <section className="settings-section">
+                  <h3>
+                    <FileText size={16} /> Prompt 预设
+                  </h3>
+                  <div className="prompt-preset-manager">
+                    <aside className="prompt-preset-list">
+                      <button
+                        className={!editingPresetId ? "active" : ""}
+                        onClick={startNewPreset}
+                      >
+                        <Plus size={15} /> 新建预设
+                      </button>
+                      {exportPresets.map((preset) => (
+                        <button
+                          key={preset.id}
+                          className={preset.id === editingPresetId ? "active" : ""}
+                          onClick={() => selectPreset(preset)}
+                        >
+                          <span>{preset.name}</span>
+                          <small>{exportTemplateLabels[preset.baseTemplateId]}</small>
+                        </button>
+                      ))}
+                    </aside>
+                    <div className="prompt-preset-editor">
+                      <div className="preset-editor-heading">
+                        <strong>{selectedPreset ? "编辑预设" : "新建预设"}</strong>
+                        {selectedPreset && <small>{new Date(selectedPreset.updatedAt).toLocaleString()}</small>}
+                      </div>
+                      <label className="modal-field">
+                        预设名称
+                        <input
+                          value={presetDraft.name}
+                          onChange={(event) =>
+                            setPresetDraft({ ...presetDraft, name: event.target.value })
+                          }
+                          placeholder="例如 发给 GPT 修改整章"
+                        />
+                      </label>
+                      <label className="modal-field">
+                        正文结构
+                        <select
+                          value={presetDraft.baseTemplateId}
+                          onChange={(event) =>
+                            setPresetDraft({
+                              ...presetDraft,
+                              baseTemplateId: event.target.value as ExportTemplate,
+                            })
+                          }
+                        >
+                          {(Object.keys(exportTemplateLabels) as ExportTemplate[]).map((templateId) => (
+                            <option key={templateId} value={templateId}>
+                              {exportTemplateLabels[templateId]}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="modal-field">
+                        系统提示词
+                        <textarea
+                          value={presetDraft.systemPrompt}
+                          onChange={(event) =>
+                            setPresetDraft({ ...presetDraft, systemPrompt: event.target.value })
+                          }
+                        />
+                      </label>
+                      <label className="modal-field">
+                        任务提示词
+                        <textarea
+                          value={presetDraft.taskPrompt}
+                          onChange={(event) =>
+                            setPresetDraft({ ...presetDraft, taskPrompt: event.target.value })
+                          }
+                        />
+                      </label>
+                      <div className="modal-actions preset-editor-actions">
+                        <button onClick={startNewPreset}>
+                          <Plus size={16} /> 新建
+                        </button>
+                        <button
+                          className="danger"
+                          onClick={() => void deletePreset()}
+                          disabled={busy || !editingPresetId}
+                        >
+                          <Trash2 size={16} /> 删除
+                        </button>
+                        <button
+                          className="primary-button"
+                          onClick={() => void savePreset()}
+                          disabled={busy || !presetDraft.name.trim()}
+                        >
+                          <Save size={16} /> 保存预设
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            )}
 
-        <section className="settings-section open-source-section">
-          <h3>
-            <Github size={16} /> 开源信息
-          </h3>
-          <button
-            type="button"
-            className="open-source-card"
-            onClick={onOpenRepository}
-          >
-            <span>
-              <strong>coderyjc/AuroraMD</strong>
-              <small>GitHub 开源地址</small>
-            </span>
-            <ArrowRight size={16} />
-          </button>
-        </section>
+            {activeCategory === "backup" && (
+              <div className="settings-pane">
+                <section className="settings-section">
+                  <h3>
+                    <Database size={16} /> 数据备份
+                  </h3>
+                  <div className="backup-actions backup-actions-panel">
+                    <button onClick={onBackupExport} disabled={busy}>
+                      <Download size={16} /> 导出备份
+                    </button>
+                    <button onClick={onBackupRestore} disabled={busy}>
+                      <Archive size={16} /> 恢复备份
+                    </button>
+                  </div>
+                </section>
+              </div>
+            )}
+
+            {activeCategory === "about" && (
+              <div className="settings-pane">
+                <section className="settings-section">
+                  <h3>
+                    <Github size={16} /> 关于 AuroraMD
+                  </h3>
+                  <div className="about-release-card">
+                    <div>
+                      <span>当前版本</span>
+                      <strong>v0.5.1</strong>
+                    </div>
+                    <ul>
+                      <li>Markdown 阅读器支持 Mermaid 图表、代码语法高亮和相对路径本地图片。</li>
+                      <li>新增图片预览缩放、章节列表右键菜单和划动批注。</li>
+                      <li>优化暗色主题表格边框、阅读器侧栏按钮布局和章节列表长标题显示。</li>
+                    </ul>
+                  </div>
+                  <button
+                    type="button"
+                    className="open-source-card"
+                    onClick={onOpenRepository}
+                  >
+                    <span>
+                      <strong>coderyjc/AuroraMD</strong>
+                      <small>GitHub 开源地址</small>
+                    </span>
+                    <ArrowRight size={16} />
+                  </button>
+                </section>
+              </div>
+            )}
+          </main>
+        </div>
       </section>
     </div>
   );
