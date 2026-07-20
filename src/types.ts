@@ -137,7 +137,11 @@ export interface AppSettings {
   themeSeries: string;
   theme: string;
   interfaceFontFamily: string;
+  interfaceLatinFontFamily: string;
+  interfaceCjkFontFamily: string;
   readerFontFamily: string;
+  readerLatinFontFamily: string;
+  readerCjkFontFamily: string;
   fontSize: number;
   lineHeight: number;
   contentWidth: number;

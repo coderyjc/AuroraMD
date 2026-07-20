@@ -119,7 +119,9 @@ import {
   getHeadingPath,
   getMarkdownReadableText,
   getRenderedSelectionAnchor,
+  renderMarkdownToReadableText,
   renderMarkdownWithAnnotations,
+  type ChangeHighlight,
   type SearchHighlight,
 } from "./markdown";
 import { renderMermaidDiagrams } from "./mermaid";
@@ -148,6 +150,7 @@ import type {
   SystemFont,
 } from "./types";
 import { chapterFileName } from "./utils/chapters";
+import { diffMarkdownLines } from "./utils/diff";
 import { matchShortcut, parseShortcutBindings, shouldIgnoreShortcut } from "./utils/shortcuts";
 
 interface ContextMenuState {
@@ -177,6 +180,12 @@ interface ImagePreviewState {
   src: string;
   alt: string;
   scale: number;
+}
+
+interface ChangeHighlightBase {
+  targetVersionId: string;
+  baseVersionId: string;
+  content: string;
 }
 
 type ViewTransitionDocument = Document & {
@@ -471,6 +480,10 @@ export default function App() {
   const [enhancedMarkdownKey, setEnhancedMarkdownKey] = useState("");
   const [imagePreview, setImagePreview] = useState<ImagePreviewState | null>(null);
   const [imagePreviewClosing, setImagePreviewClosing] = useState(false);
+  const [showChangeHighlights, setShowChangeHighlights] = useState(false);
+  const [changeHighlightBusy, setChangeHighlightBusy] = useState(false);
+  const [changeHighlightBase, setChangeHighlightBase] = useState<ChangeHighlightBase | null>(null);
+  const [changeHighlights, setChangeHighlights] = useState<ChangeHighlight[]>([]);
 
   const articleRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -911,6 +924,19 @@ export default function App() {
       ? chapters[currentChapterIndex + 1]
       : null;
 
+  const previousReaderVersion = useMemo(() => {
+    if (!reader) return null;
+    return (
+      reader.versions
+        .filter((version) => version.versionNumber < reader.version.versionNumber)
+        .sort((left, right) => {
+          const numberDelta = right.versionNumber - left.versionNumber;
+          if (numberDelta !== 0) return numberDelta;
+          return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+        })[0] ?? null
+    );
+  }, [reader]);
+
   const activeGlobalSearchHighlight = useMemo<SearchHighlight | null>(() => {
     if (!reader || activeSearchHighlight?.chapterVersionId !== reader.version.id) return null;
     return {
@@ -994,8 +1020,77 @@ export default function App() {
     ) {
       return;
     }
-    applyDomHighlights(articleRef.current, reader.annotations, visibleSearchHighlights);
-  }, [enhancedMarkdownKey, markdownEnhancementKey, reader, visibleSearchHighlights]);
+    applyDomHighlights(
+      articleRef.current,
+      reader.annotations,
+      visibleSearchHighlights,
+      showChangeHighlights ? changeHighlights : [],
+    );
+  }, [
+    changeHighlights,
+    enhancedMarkdownKey,
+    markdownEnhancementKey,
+    reader,
+    showChangeHighlights,
+    visibleSearchHighlights,
+  ]);
+
+  useEffect(() => {
+    if (!showChangeHighlights || !reader || !previousReaderVersion) {
+      setChangeHighlightBase(null);
+      setChangeHighlightBusy(false);
+      return;
+    }
+
+    let cancelled = false;
+    setChangeHighlightBase(null);
+    setChangeHighlightBusy(true);
+    void readChapterVersion(previousReaderVersion.id)
+      .then((baseReader) => {
+        if (cancelled) return;
+        setChangeHighlightBase({
+          targetVersionId: reader.version.id,
+          baseVersionId: previousReaderVersion.id,
+          content: baseReader.content,
+        });
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setChangeHighlightBase(null);
+          setError(readError(err));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setChangeHighlightBusy(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [previousReaderVersion?.id, reader?.version.id, showChangeHighlights]);
+
+  useEffect(() => {
+    if (
+      !showChangeHighlights ||
+      !reader ||
+      !articleRef.current ||
+      enhancedMarkdownKey !== markdownEnhancementKey ||
+      !changeHighlightBase ||
+      changeHighlightBase.targetVersionId !== reader.version.id
+    ) {
+      setChangeHighlights([]);
+      return;
+    }
+
+    setChangeHighlights(
+      buildChangeHighlights(
+        articleRef.current,
+        changeHighlightBase.content,
+        reader.content,
+        reader.chapter.filePath,
+      ),
+    );
+  }, [changeHighlightBase, enhancedMarkdownKey, markdownEnhancementKey, reader, showChangeHighlights]);
 
   const detailAnnotation = useMemo(() => {
     if (!reader || !detailAnnotationId) return null;
@@ -1119,8 +1214,16 @@ export default function App() {
   const readerStyle = useMemo(
     () =>
       ({
-        "--interface-font-family": settings.interfaceFontFamily,
-        "--reader-font-family": settings.readerFontFamily,
+        "--interface-font-family": composeLanguageFontStack(
+          "Aurora Interface Latin",
+          "Aurora Interface CJK",
+          "sans-serif",
+        ),
+        "--reader-font-family": composeLanguageFontStack(
+          "Aurora Reader Latin",
+          "Aurora Reader CJK",
+          "serif",
+        ),
         "--reader-font-size": `${settings.fontSize}px`,
         "--reader-line-height": settings.lineHeight,
         "--reader-width": `${settings.contentWidth}px`,
@@ -1137,9 +1240,31 @@ export default function App() {
   const homeStyle = useMemo(
     () =>
       ({
-        "--interface-font-family": settings.interfaceFontFamily,
+        "--interface-font-family": composeLanguageFontStack(
+          "Aurora Interface Latin",
+          "Aurora Interface CJK",
+          "sans-serif",
+        ),
       }) as CSSProperties,
-    [settings.interfaceFontFamily],
+    [],
+  );
+
+  const languageFontFaceCss = useMemo(
+    () =>
+      [
+        createLanguageFontFace("Aurora Interface Latin", settings.interfaceLatinFontFamily, "latin"),
+        createLanguageFontFace("Aurora Interface CJK", settings.interfaceCjkFontFamily, "cjk"),
+        createLanguageFontFace("Aurora Reader Latin", settings.readerLatinFontFamily, "latin"),
+        createLanguageFontFace("Aurora Reader CJK", settings.readerCjkFontFamily, "cjk"),
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    [
+      settings.interfaceCjkFontFamily,
+      settings.interfaceLatinFontFamily,
+      settings.readerCjkFontFamily,
+      settings.readerLatinFontFamily,
+    ],
   );
 
   async function boot() {
@@ -2917,6 +3042,7 @@ export default function App() {
         style={homeStyle}
         onContextMenu={suppressNativeContextMenu}
       >
+        <style>{languageFontFaceCss}</style>
         <AppTitlebar title="AuroraMD" subtitle="首页" />
         <TopNotice error={error} notice={notice} closing={topNoticeClosing} onClose={closeTopNotice} />
         <header className="home-header">
@@ -3341,6 +3467,7 @@ export default function App() {
       onMouseMove={handleReadingFullscreenPointerMove}
       onMouseLeave={hideReadingFullscreenChrome}
     >
+      <style>{languageFontFaceCss}</style>
       <AppTitlebar title={activeBook.name} subtitle={reader?.chapter.title ?? "AuroraMD"} />
       <TopNotice error={error} notice={notice} closing={topNoticeClosing} onClose={closeTopNotice} />
       {imagePreview && (
@@ -3685,7 +3812,11 @@ export default function App() {
           closing={settingsClosing}
           settings={settings}
           systemFonts={systemFonts}
+          showChangeHighlights={showChangeHighlights}
+          changeHighlightBusy={changeHighlightBusy}
+          hasPreviousVersion={Boolean(previousReaderVersion)}
           onChange={applySettings}
+          onChangeHighlightToggle={setShowChangeHighlights}
           onClose={closeReaderSettingsPanel}
         />
       )}
@@ -3980,6 +4111,54 @@ function getReadingStats(content: string) {
   };
 }
 
+function buildChangeHighlights(
+  root: HTMLElement,
+  oldContent: string,
+  newContent: string,
+  chapterFilePath: string,
+) {
+  const rootText = getMarkdownReadableText(root);
+  if (!rootText || oldContent === newContent) return [];
+
+  const highlights: ChangeHighlight[] = [];
+  let searchCursor = 0;
+  for (const block of diffMarkdownLines(oldContent, newContent)) {
+    if ((block.type !== "added" && block.type !== "modified") || block.newLines.length === 0) {
+      continue;
+    }
+
+    const changedText = normalizeReadableChangeText(
+      renderMarkdownToReadableText(block.newLines.join("\n"), chapterFilePath),
+    );
+    if (!changedText) continue;
+
+    const startOffset = findReadableChangeOffset(rootText, changedText, searchCursor);
+    if (startOffset < 0) continue;
+
+    const endOffset = startOffset + changedText.length;
+    highlights.push({
+      id: block.id,
+      type: block.type,
+      startOffset,
+      endOffset,
+      changedText,
+    });
+    searchCursor = endOffset;
+  }
+
+  return highlights;
+}
+
+function normalizeReadableChangeText(value: string) {
+  return value.replace(/\u00a0/g, " ").trim();
+}
+
+function findReadableChangeOffset(rootText: string, changedText: string, preferredStart: number) {
+  const fromCursor = rootText.indexOf(changedText, preferredStart);
+  if (fromCursor >= 0) return fromCursor;
+  return rootText.indexOf(changedText);
+}
+
 function buildReaderSearchMatches(rootText: string, query: string) {
   const trimmed = query.trim();
   if (!trimmed) return [];
@@ -4018,4 +4197,95 @@ function buildReaderSearchExcerpt(rootText: string, startOffset: number, endOffs
 
 function collapseReaderSearchWhitespace(value: string) {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function composeLanguageFontStack(
+  latinAlias: string,
+  cjkAlias: string,
+  fallback: "sans-serif" | "serif",
+) {
+  return `${quoteCssString(latinAlias)}, ${quoteCssString(cjkAlias)}, ${fallback}`;
+}
+
+function createLanguageFontFace(alias: string, fontFamilyStack: string, script: "latin" | "cjk") {
+  const localSources = splitFontStack(fontFamilyStack)
+    .filter((family) => !isGenericFontFamily(family))
+    .map((family) => `local(${quoteCssString(stripFontQuotes(family))})`);
+
+  if (!localSources.length) return "";
+
+  const unicodeRange =
+    script === "latin"
+      ? "U+0000-024F, U+1E00-1EFF, U+2000-206F, U+2070-209F, U+20A0-20CF, U+2100-214F, U+2150-218F"
+      : "U+2E80-2EFF, U+2F00-2FDF, U+3000-303F, U+3040-30FF, U+3100-312F, U+31A0-31BF, U+31F0-31FF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FF00-FFEF, U+20000-2FA1F";
+
+  return [
+    "@font-face {",
+    `  font-family: ${quoteCssString(alias)};`,
+    `  src: ${localSources.join(", ")};`,
+    `  unicode-range: ${unicodeRange};`,
+    "  font-display: swap;",
+    "}",
+  ].join("\n");
+}
+
+function splitFontStack(value: string) {
+  const families: string[] = [];
+  let current = "";
+  let quote: string | null = null;
+  let escaped = false;
+
+  for (const character of value) {
+    if (escaped) {
+      current += character;
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      current += character;
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      current += character;
+      if (character === quote) quote = null;
+      continue;
+    }
+    if (character === "\"" || character === "'") {
+      current += character;
+      quote = character;
+      continue;
+    }
+    if (character === ",") {
+      if (current.trim()) families.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += character;
+  }
+
+  if (current.trim()) families.push(current.trim());
+  return families;
+}
+
+function isGenericFontFamily(family: string) {
+  return ["serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui"].includes(
+    stripFontQuotes(family).toLowerCase(),
+  );
+}
+
+function stripFontQuotes(value: string) {
+  const trimmed = value.trim();
+  if (trimmed.length >= 2) {
+    const first = trimmed[0];
+    const last = trimmed[trimmed.length - 1];
+    if ((first === "\"" && last === "\"") || (first === "'" && last === "'")) {
+      return trimmed.slice(1, -1).replace(/\\(["'\\])/g, "$1");
+    }
+  }
+  return trimmed;
+}
+
+function quoteCssString(value: string) {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"").replace(/\n/g, "\\A ")}"`;
 }

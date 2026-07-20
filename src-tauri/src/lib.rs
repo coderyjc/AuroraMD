@@ -1803,6 +1803,10 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
         Ok(())
     };
     let split_font_restore_result = if restore_result.is_ok()
+        && backup_has_column(&conn, "settings", "interface_latin_font_family")?
+        && backup_has_column(&conn, "settings", "interface_cjk_font_family")?
+        && backup_has_column(&conn, "settings", "reader_latin_font_family")?
+        && backup_has_column(&conn, "settings", "reader_cjk_font_family")?
         && backup_has_column(&conn, "settings", "interface_font_family")?
         && backup_has_column(&conn, "settings", "reader_font_family")?
     {
@@ -1810,6 +1814,26 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
             r#"
             UPDATE settings
             SET
+                interface_latin_font_family = (
+                    SELECT interface_latin_font_family
+                    FROM backup.settings
+                    WHERE backup.settings.id = settings.id
+                ),
+                interface_cjk_font_family = (
+                    SELECT interface_cjk_font_family
+                    FROM backup.settings
+                    WHERE backup.settings.id = settings.id
+                ),
+                reader_latin_font_family = (
+                    SELECT reader_latin_font_family
+                    FROM backup.settings
+                    WHERE backup.settings.id = settings.id
+                ),
+                reader_cjk_font_family = (
+                    SELECT reader_cjk_font_family
+                    FROM backup.settings
+                    WHERE backup.settings.id = settings.id
+                ),
                 interface_font_family = (
                     SELECT interface_font_family
                     FROM backup.settings
@@ -1832,11 +1856,53 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
             );
             "#,
         )
+    } else if restore_result.is_ok()
+        && backup_has_column(&conn, "settings", "interface_font_family")?
+        && backup_has_column(&conn, "settings", "reader_font_family")?
+    {
+        conn.execute_batch(
+            r#"
+            UPDATE settings
+            SET
+                interface_font_family = (
+                    SELECT interface_font_family
+                    FROM backup.settings
+                    WHERE backup.settings.id = settings.id
+                ),
+                interface_latin_font_family = (
+                    SELECT interface_font_family
+                    FROM backup.settings
+                    WHERE backup.settings.id = settings.id
+                ),
+                reader_font_family = (
+                    SELECT reader_font_family
+                    FROM backup.settings
+                    WHERE backup.settings.id = settings.id
+                ),
+                reader_latin_font_family = (
+                    SELECT reader_font_family
+                    FROM backup.settings
+                    WHERE backup.settings.id = settings.id
+                ),
+                font_family = (
+                    SELECT reader_font_family
+                    FROM backup.settings
+                    WHERE backup.settings.id = settings.id
+                )
+            WHERE EXISTS (
+                SELECT 1
+                FROM backup.settings
+                WHERE backup.settings.id = settings.id
+            );
+            "#,
+        )
     } else if restore_result.is_ok() {
         conn.execute_batch(
             r#"
             UPDATE settings
-            SET reader_font_family = font_family
+            SET
+                reader_font_family = font_family,
+                reader_latin_font_family = font_family
             WHERE TRIM(font_family) <> '';
             "#,
         )
@@ -1955,13 +2021,36 @@ fn get_settings(state: State<AppState>) -> AppResult<AppSettings> {
 fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<AppSettings> {
     let conn = lock_conn(&state)?;
     let current = load_settings(&conn)?;
-    let next_interface_font_family = patch
-        .interface_font_family
-        .unwrap_or(current.interface_font_family);
-    let next_reader_font_family = patch
-        .reader_font_family
-        .or(patch.font_family)
-        .unwrap_or(current.reader_font_family);
+    let patch_interface_font_family = patch.interface_font_family;
+    let patch_reader_font_family = patch.reader_font_family.or(patch.font_family);
+    let next_interface_latin_font_family = patch
+        .interface_latin_font_family
+        .or_else(|| patch_interface_font_family.clone())
+        .unwrap_or(current.interface_latin_font_family);
+    let next_interface_cjk_font_family = patch
+        .interface_cjk_font_family
+        .unwrap_or(current.interface_cjk_font_family);
+    let next_reader_latin_font_family = patch
+        .reader_latin_font_family
+        .or_else(|| patch_reader_font_family.clone())
+        .unwrap_or(current.reader_latin_font_family);
+    let next_reader_cjk_font_family = patch
+        .reader_cjk_font_family
+        .unwrap_or(current.reader_cjk_font_family);
+    let next_interface_font_family = patch_interface_font_family.unwrap_or_else(|| {
+        compose_font_family(
+            &next_interface_latin_font_family,
+            &next_interface_cjk_font_family,
+            "sans-serif",
+        )
+    });
+    let next_reader_font_family = patch_reader_font_family.unwrap_or_else(|| {
+        compose_font_family(
+            &next_reader_latin_font_family,
+            &next_reader_cjk_font_family,
+            "serif",
+        )
+    });
     conn.execute(
         r#"
         UPDATE settings
@@ -1970,20 +2059,24 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
             theme_series = ?2,
             theme = ?3,
             interface_font_family = ?4,
-            reader_font_family = ?5,
-            font_family = ?5,
-            font_size = ?6,
-            line_height = ?7,
-            content_width = ?8,
-            page_padding = ?9,
-            paragraph_spacing = ?10,
-            surface = ?11,
-            border_style = ?12,
-            focus_mode = ?13,
-            slide_annotate = ?14,
-            home_default_view = ?15,
-            home_table_columns = ?16,
-            shortcut_bindings = ?17
+            interface_latin_font_family = ?5,
+            interface_cjk_font_family = ?6,
+            reader_font_family = ?7,
+            reader_latin_font_family = ?8,
+            reader_cjk_font_family = ?9,
+            font_family = ?7,
+            font_size = ?10,
+            line_height = ?11,
+            content_width = ?12,
+            page_padding = ?13,
+            paragraph_spacing = ?14,
+            surface = ?15,
+            border_style = ?16,
+            focus_mode = ?17,
+            slide_annotate = ?18,
+            home_default_view = ?19,
+            home_table_columns = ?20,
+            shortcut_bindings = ?21
         WHERE id = 1
         "#,
         params![
@@ -1993,7 +2086,11 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
             patch.theme_series.unwrap_or(current.theme_series),
             patch.theme.unwrap_or(current.theme),
             next_interface_font_family,
+            next_interface_latin_font_family,
+            next_interface_cjk_font_family,
             next_reader_font_family,
+            next_reader_latin_font_family,
+            next_reader_cjk_font_family,
             patch.font_size.unwrap_or(current.font_size),
             patch.line_height.unwrap_or(current.line_height),
             patch.content_width.unwrap_or(current.content_width),
@@ -2019,6 +2116,84 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
 #[tauri::command]
 fn list_system_fonts() -> AppResult<Vec<SystemFont>> {
     collect_system_fonts()
+}
+
+fn compose_font_family(latin_font_family: &str, cjk_font_family: &str, fallback: &str) -> String {
+    let mut families = Vec::new();
+    for family in split_font_family_stack(latin_font_family)
+        .into_iter()
+        .chain(split_font_family_stack(cjk_font_family))
+    {
+        if is_generic_font_family(&family) {
+            continue;
+        }
+        let normalized = family.trim().to_string();
+        if normalized.is_empty() || families.iter().any(|item| item == &normalized) {
+            continue;
+        }
+        families.push(normalized);
+    }
+    families.push(fallback.to_string());
+    families.join(", ")
+}
+
+fn split_font_family_stack(value: &str) -> Vec<String> {
+    let mut families = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+
+    for character in value.chars() {
+        if escaped {
+            current.push(character);
+            escaped = false;
+            continue;
+        }
+        if character == '\\' {
+            current.push(character);
+            escaped = true;
+            continue;
+        }
+        if let Some(quote_character) = quote {
+            current.push(character);
+            if character == quote_character {
+                quote = None;
+            }
+            continue;
+        }
+        if character == '"' || character == '\'' {
+            current.push(character);
+            quote = Some(character);
+            continue;
+        }
+        if character == ',' {
+            let trimmed = current.trim();
+            if !trimmed.is_empty() {
+                families.push(trimmed.to_string());
+            }
+            current.clear();
+            continue;
+        }
+        current.push(character);
+    }
+
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        families.push(trimmed.to_string());
+    }
+    families
+}
+
+fn is_generic_font_family(family: &str) -> bool {
+    matches!(
+        family
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .to_ascii_lowercase()
+            .as_str(),
+        "serif" | "sans-serif" | "monospace" | "cursive" | "fantasy" | "system-ui"
+    )
 }
 
 #[tauri::command]
@@ -2823,7 +2998,11 @@ fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
             theme_series,
             theme,
             interface_font_family,
+            interface_latin_font_family,
+            interface_cjk_font_family,
             reader_font_family,
+            reader_latin_font_family,
+            reader_cjk_font_family,
             font_size,
             line_height,
             content_width,
@@ -2846,19 +3025,23 @@ fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
                 theme_series: row.get(1)?,
                 theme: row.get(2)?,
                 interface_font_family: row.get(3)?,
-                reader_font_family: row.get(4)?,
-                font_size: row.get(5)?,
-                line_height: row.get(6)?,
-                content_width: row.get(7)?,
-                page_padding: row.get(8)?,
-                paragraph_spacing: row.get(9)?,
-                surface: row.get(10)?,
-                border_style: row.get(11)?,
-                focus_mode: row.get(12)?,
-                slide_annotate: row.get(13)?,
-                home_default_view: row.get(14)?,
-                home_table_columns: row.get(15)?,
-                shortcut_bindings: row.get(16)?,
+                interface_latin_font_family: row.get(4)?,
+                interface_cjk_font_family: row.get(5)?,
+                reader_font_family: row.get(6)?,
+                reader_latin_font_family: row.get(7)?,
+                reader_cjk_font_family: row.get(8)?,
+                font_size: row.get(9)?,
+                line_height: row.get(10)?,
+                content_width: row.get(11)?,
+                page_padding: row.get(12)?,
+                paragraph_spacing: row.get(13)?,
+                surface: row.get(14)?,
+                border_style: row.get(15)?,
+                focus_mode: row.get(16)?,
+                slide_annotate: row.get(17)?,
+                home_default_view: row.get(18)?,
+                home_table_columns: row.get(19)?,
+                shortcut_bindings: row.get(20)?,
             })
         },
     )

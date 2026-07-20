@@ -556,13 +556,21 @@ export function SettingsPanel({
   closing,
   settings,
   systemFonts,
+  showChangeHighlights,
+  changeHighlightBusy,
+  hasPreviousVersion,
   onChange,
+  onChangeHighlightToggle,
   onClose,
 }: {
   closing: boolean;
   settings: AppSettings;
   systemFonts: SystemFont[];
+  showChangeHighlights: boolean;
+  changeHighlightBusy: boolean;
+  hasPreviousVersion: boolean;
   onChange: (patch: Partial<AppSettings>) => void;
+  onChangeHighlightToggle: (enabled: boolean) => void;
   onClose: () => void;
 }) {
   return (
@@ -585,27 +593,56 @@ export function SettingsPanel({
           </button>
         </header>
 
-        <label className="settings-toggle">
-          <span>
-            <strong>聚焦模式</strong>
-            <small>悬浮正文时，仅当前段落与相邻段落保持清晰。</small>
-          </span>
-          <input
-            type="checkbox"
-            checked={settings.focusMode}
-            onChange={(event) => onChange({ focusMode: event.target.checked })}
-          />
-          <i aria-hidden="true" />
-        </label>
+        <div className="settings-toggle-grid">
+          <label className="settings-toggle">
+            <span>
+              <strong>聚焦模式</strong>
+              <small>悬浮正文时，仅当前段落与相邻段落保持清晰。</small>
+            </span>
+            <input
+              type="checkbox"
+              checked={settings.focusMode}
+              onChange={(event) => onChange({ focusMode: event.target.checked })}
+            />
+            <i aria-hidden="true" />
+          </label>
 
-        <FontPicker
-          label="阅读器字体"
-          description="只改变阅读器正文，不影响主页和工具栏。"
-          value={settings.readerFontFamily}
-          fallbackGeneric="serif"
-          systemFonts={systemFonts}
-          onChange={(value) => onChange({ readerFontFamily: value })}
-        />
+          <label className={`settings-toggle ${changeHighlightBusy ? "loading" : ""}`}>
+            <span>
+              <strong>高亮变更</strong>
+              <small>
+                {hasPreviousVersion
+                  ? "显示相对上一版本增加和更改的内容。"
+                  : "首个版本没有上一版本可对比。"}
+              </small>
+            </span>
+            <input
+              type="checkbox"
+              checked={showChangeHighlights}
+              onChange={(event) => onChangeHighlightToggle(event.target.checked)}
+            />
+            <i aria-hidden="true" />
+          </label>
+        </div>
+
+        <div className="reader-font-setting-grid">
+          <FontPicker
+            label="阅读器英文字体"
+            description="只改变阅读器正文中的英文和数字。"
+            value={settings.readerLatinFontFamily}
+            fallbackGeneric="serif"
+            systemFonts={systemFonts}
+            onChange={(value) => onChange({ readerLatinFontFamily: value })}
+          />
+          <FontPicker
+            label="阅读器中文字体"
+            description="只改变阅读器正文中的中文内容。"
+            value={settings.readerCjkFontFamily}
+            fallbackGeneric="serif"
+            systemFonts={systemFonts}
+            onChange={(value) => onChange({ readerCjkFontFamily: value })}
+          />
+        </div>
 
         <RangeControl
           label="字号"

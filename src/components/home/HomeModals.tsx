@@ -20,6 +20,7 @@ import {
   getDefaultThemeForSeries,
   getThemesForSeries,
   homeTableColumnOptions,
+  themeOptions as allThemeOptions,
   visibleThemeSeriesOptions,
 } from "../../constants";
 import { FontPicker } from "../FontPicker";
@@ -851,6 +852,16 @@ export function HomeSettingsModal({
     visibleThemeSeriesOptions.find((series) => series.id === activeThemeSeries) ??
     visibleThemeSeriesOptions[0];
   const availableThemes = getThemesForSeries(activeThemeSeries);
+  const tryRandomTheme = () => {
+    const candidates = allThemeOptions.filter(
+      (theme) => theme.value !== settings.theme || theme.series !== settings.themeSeries,
+    );
+    const pool = candidates.length ? candidates : allThemeOptions;
+    const choice = pool[Math.floor(Math.random() * pool.length)];
+    if (choice) {
+      onChange({ themeSeries: choice.series, theme: choice.value });
+    }
+  };
   const tableColumns = parseHomeTableColumns(settings.homeTableColumns);
   const setTableColumnVisible = (column: HomeTableColumnKey, visible: boolean) => {
     onChange({
@@ -1006,9 +1017,14 @@ export function HomeSettingsModal({
                 </section>
 
                 <section className="settings-section">
-                  <h3>
-                    <Palette size={16} /> 主题
-                  </h3>
+                  <div className="settings-section-heading">
+                    <h3>
+                      <Palette size={16} /> 主题
+                    </h3>
+                    <button type="button" className="luck-theme-button" onClick={tryRandomTheme}>
+                      试试手气~
+                    </button>
+                  </div>
                   <div className="theme-picker-layout">
                     <aside className="theme-series-list" aria-label="主题系列">
                       {visibleThemeSeriesOptions.map((series) => (
@@ -1086,20 +1102,36 @@ export function HomeSettingsModal({
                   </h3>
                   <div className="font-setting-grid">
                     <FontPicker
-                      label="主界面字体"
-                      description="用于首页、标题栏、按钮、菜单和批注列表。"
-                      value={settings.interfaceFontFamily}
+                      label="主界面英文字体"
+                      description="用于首页、标题栏、按钮、菜单中的英文和数字。"
+                      value={settings.interfaceLatinFontFamily}
                       fallbackGeneric="sans-serif"
                       systemFonts={systemFonts}
-                      onChange={(value) => onChange({ interfaceFontFamily: value })}
+                      onChange={(value) => onChange({ interfaceLatinFontFamily: value })}
                     />
                     <FontPicker
-                      label="阅读器字体"
-                      description="用于阅读器正文。也可以在阅读器设置里单独调整。"
-                      value={settings.readerFontFamily}
+                      label="主界面中文字体"
+                      description="用于首页、菜单、设置和批注列表中的中文。"
+                      value={settings.interfaceCjkFontFamily}
+                      fallbackGeneric="sans-serif"
+                      systemFonts={systemFonts}
+                      onChange={(value) => onChange({ interfaceCjkFontFamily: value })}
+                    />
+                    <FontPicker
+                      label="阅读器英文字体"
+                      description="用于阅读器正文中的英文、数字和代码外文本。"
+                      value={settings.readerLatinFontFamily}
                       fallbackGeneric="serif"
                       systemFonts={systemFonts}
-                      onChange={(value) => onChange({ readerFontFamily: value })}
+                      onChange={(value) => onChange({ readerLatinFontFamily: value })}
+                    />
+                    <FontPicker
+                      label="阅读器中文字体"
+                      description="用于阅读器正文中的中文内容。"
+                      value={settings.readerCjkFontFamily}
+                      fallbackGeneric="serif"
+                      systemFonts={systemFonts}
+                      onChange={(value) => onChange({ readerCjkFontFamily: value })}
                     />
                   </div>
                 </section>

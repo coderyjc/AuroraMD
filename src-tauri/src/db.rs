@@ -86,7 +86,11 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
             theme TEXT NOT NULL,
             font_family TEXT NOT NULL,
             interface_font_family TEXT NOT NULL DEFAULT '"IBM Plex Sans", "Segoe UI", "Microsoft YaHei", sans-serif',
+            interface_latin_font_family TEXT NOT NULL DEFAULT '"IBM Plex Sans", "Segoe UI", sans-serif',
+            interface_cjk_font_family TEXT NOT NULL DEFAULT '"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif',
             reader_font_family TEXT NOT NULL DEFAULT 'Literata, Georgia, serif',
+            reader_latin_font_family TEXT NOT NULL DEFAULT 'Literata, Georgia, serif',
+            reader_cjk_font_family TEXT NOT NULL DEFAULT '"Noto Serif SC", "Songti SC", SimSun, serif',
             font_size INTEGER NOT NULL,
             line_height REAL NOT NULL,
             content_width INTEGER NOT NULL,
@@ -212,8 +216,32 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
     ensure_column(
         &conn,
         "settings",
+        "interface_latin_font_family",
+        "ALTER TABLE settings ADD COLUMN interface_latin_font_family TEXT NOT NULL DEFAULT '\"IBM Plex Sans\", \"Segoe UI\", sans-serif'",
+    )?;
+    ensure_column(
+        &conn,
+        "settings",
+        "interface_cjk_font_family",
+        "ALTER TABLE settings ADD COLUMN interface_cjk_font_family TEXT NOT NULL DEFAULT '\"Microsoft YaHei\", \"PingFang SC\", \"Noto Sans CJK SC\", sans-serif'",
+    )?;
+    ensure_column(
+        &conn,
+        "settings",
         "reader_font_family",
         "ALTER TABLE settings ADD COLUMN reader_font_family TEXT NOT NULL DEFAULT 'Literata, Georgia, serif'",
+    )?;
+    ensure_column(
+        &conn,
+        "settings",
+        "reader_latin_font_family",
+        "ALTER TABLE settings ADD COLUMN reader_latin_font_family TEXT NOT NULL DEFAULT 'Literata, Georgia, serif'",
+    )?;
+    ensure_column(
+        &conn,
+        "settings",
+        "reader_cjk_font_family",
+        "ALTER TABLE settings ADD COLUMN reader_cjk_font_family TEXT NOT NULL DEFAULT '\"Noto Serif SC\", \"Songti SC\", SimSun, serif'",
     )?;
     conn.execute_batch(
         r#"
@@ -223,6 +251,25 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
           AND (
             reader_font_family = 'Literata, Georgia, serif'
             OR TRIM(reader_font_family) = ''
+          );
+        "#,
+    )?;
+    conn.execute_batch(
+        r#"
+        UPDATE settings
+        SET interface_latin_font_family = interface_font_family
+        WHERE TRIM(interface_font_family) <> ''
+          AND (
+            interface_latin_font_family = '"IBM Plex Sans", "Segoe UI", sans-serif'
+            OR TRIM(interface_latin_font_family) = ''
+          );
+
+        UPDATE settings
+        SET reader_latin_font_family = reader_font_family
+        WHERE TRIM(reader_font_family) <> ''
+          AND (
+            reader_latin_font_family = 'Literata, Georgia, serif'
+            OR TRIM(reader_latin_font_family) = ''
           );
         "#,
     )?;
@@ -250,7 +297,11 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
             theme,
             font_family,
             interface_font_family,
+            interface_latin_font_family,
+            interface_cjk_font_family,
             reader_font_family,
+            reader_latin_font_family,
+            reader_cjk_font_family,
             font_size,
             line_height,
             content_width,
@@ -263,7 +314,7 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
             home_default_view,
             home_table_columns,
             shortcut_bindings
-        ) VALUES (1, 100, 'classic', 'paper', 'Literata, Georgia, serif', '"IBM Plex Sans", "Segoe UI", "Microsoft YaHei", sans-serif', 'Literata, Georgia, serif', 18, 1.72, 820, 52, 18, 'warm', 'hairline', 0, 0, 'grid', '{"rowNumber":true,"chapterCount":true,"annotationCount":true,"createdAt":true,"lastOpenedAt":true}', '{"search":"Ctrl+K","nextChapter":"N","previousChapter":"P","highlight":"H","export":"E","toggleLeft":"[","toggleRight":"]"}')
+        ) VALUES (1, 100, 'classic', 'paper', 'Literata, Georgia, serif', '"IBM Plex Sans", "Segoe UI", "Microsoft YaHei", sans-serif', '"IBM Plex Sans", "Segoe UI", sans-serif', '"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif', 'Literata, Georgia, serif', 'Literata, Georgia, serif', '"Noto Serif SC", "Songti SC", SimSun, serif', 18, 1.72, 820, 52, 18, 'warm', 'hairline', 0, 0, 'grid', '{"rowNumber":true,"chapterCount":true,"annotationCount":true,"createdAt":true,"lastOpenedAt":true}', '{"search":"Ctrl+K","nextChapter":"N","previousChapter":"P","highlight":"H","export":"E","toggleLeft":"[","toggleRight":"]"}')
         "#,
         [],
     )?;

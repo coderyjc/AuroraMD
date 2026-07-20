@@ -31,6 +31,14 @@ export interface SearchHighlight {
   active?: boolean;
 }
 
+export interface ChangeHighlight {
+  id?: string;
+  startOffset: number;
+  endOffset: number;
+  changedText: string;
+  type: "added" | "modified";
+}
+
 export interface RenderedSelectionAnchor {
   selectedText: string;
   startOffset: number;
@@ -46,6 +54,8 @@ interface DomHighlightRange {
   color?: string;
   search?: boolean;
   active?: boolean;
+  change?: boolean;
+  changeType?: "added" | "modified";
 }
 
 interface TextNodeSpan {
@@ -130,6 +140,12 @@ export function renderMarkdownWithAnnotations(
   return md.render(content, { chapterFilePath });
 }
 
+export function renderMarkdownToReadableText(content: string, chapterFilePath: string) {
+  const container = document.createElement("div");
+  container.innerHTML = renderMarkdownWithAnnotations(content, chapterFilePath);
+  return getMarkdownReadableText(container);
+}
+
 export function getMarkdownReadableText(root: HTMLElement) {
   return collectTextNodes(root).map((span) => span.node.data).join("");
 }
@@ -171,6 +187,7 @@ export function applyDomHighlights(
   root: HTMLElement,
   annotations: Annotation[],
   searchHighlights?: SearchHighlight | SearchHighlight[] | null,
+  changeHighlights?: ChangeHighlight[] | null,
 ) {
   clearDomHighlights(root);
   const rootText = getMarkdownReadableText(root);
@@ -196,6 +213,16 @@ export function applyDomHighlights(
     );
   if (searchRanges.length > 0) {
     ranges.push(...normalizeNonOverlappingRanges(searchRanges, rootText.length));
+  }
+  const occupiedRanges = [...ranges];
+  const changeRanges = subtractOccupiedRanges(
+    (changeHighlights ?? [])
+      .map((highlight) => resolveChangeRange(rootText, highlight))
+      .filter((range): range is DomHighlightRange => Boolean(range)),
+    occupiedRanges,
+  );
+  if (changeRanges.length > 0) {
+    ranges.push(...normalizeNonOverlappingRanges(changeRanges, rootText.length));
   }
 
   wrapDomRanges(root, ranges);
@@ -469,7 +496,9 @@ function getBoundaryTextOffset(root: HTMLElement, container: Node, offset: numbe
 
 function clearDomHighlights(root: HTMLElement) {
   const marks = Array.from(
-    root.querySelectorAll<HTMLElement>("mark.annotation-mark, mark.search-hit-mark"),
+    root.querySelectorAll<HTMLElement>(
+      "mark.annotation-mark, mark.search-hit-mark, mark.change-highlight-mark",
+    ),
   );
   for (const mark of marks) {
     const parent = mark.parentNode;
@@ -533,6 +562,40 @@ function resolveAnnotationRange(rootText: string, annotation: Annotation): DomHi
   }
 
   return null;
+}
+
+function resolveChangeRange(
+  rootText: string,
+  changeHighlight?: ChangeHighlight | null,
+): DomHighlightRange | null {
+  if (!changeHighlight) return null;
+  if (
+    changeHighlight.startOffset >= 0 &&
+    changeHighlight.endOffset > changeHighlight.startOffset &&
+    changeHighlight.endOffset <= rootText.length &&
+    rootText.slice(changeHighlight.startOffset, changeHighlight.endOffset) ===
+      changeHighlight.changedText
+  ) {
+    return {
+      id: changeHighlight.id,
+      startOffset: changeHighlight.startOffset,
+      endOffset: changeHighlight.endOffset,
+      className: `change-highlight-mark is-${changeHighlight.type}`,
+      change: true,
+      changeType: changeHighlight.type,
+    };
+  }
+
+  const start = rootText.indexOf(changeHighlight.changedText);
+  if (start < 0) return null;
+  return {
+    id: changeHighlight.id,
+    startOffset: start,
+    endOffset: start + changeHighlight.changedText.length,
+    className: `change-highlight-mark is-${changeHighlight.type}`,
+    change: true,
+    changeType: changeHighlight.type,
+  };
 }
 
 function resolveSearchRange(
@@ -640,6 +703,50 @@ function normalizeNonOverlappingRanges(ranges: DomHighlightRange[], textLength: 
   return normalized;
 }
 
+function subtractOccupiedRanges(ranges: DomHighlightRange[], occupiedRanges: DomHighlightRange[]) {
+  if (occupiedRanges.length === 0) return ranges;
+  const occupied = [...occupiedRanges].sort((a, b) => a.startOffset - b.startOffset);
+  const visibleRanges: DomHighlightRange[] = [];
+
+  for (const range of ranges) {
+    let segments = [{ startOffset: range.startOffset, endOffset: range.endOffset }];
+    for (const blocker of occupied) {
+      segments = segments.flatMap((segment) => {
+        if (segment.endOffset <= blocker.startOffset || segment.startOffset >= blocker.endOffset) {
+          return [segment];
+        }
+        const nextSegments: Array<{ startOffset: number; endOffset: number }> = [];
+        if (segment.startOffset < blocker.startOffset) {
+          nextSegments.push({
+            startOffset: segment.startOffset,
+            endOffset: blocker.startOffset,
+          });
+        }
+        if (segment.endOffset > blocker.endOffset) {
+          nextSegments.push({
+            startOffset: blocker.endOffset,
+            endOffset: segment.endOffset,
+          });
+        }
+        return nextSegments;
+      });
+      if (segments.length === 0) break;
+    }
+
+    visibleRanges.push(
+      ...segments
+        .filter((segment) => segment.endOffset > segment.startOffset)
+        .map((segment) => ({
+          ...range,
+          startOffset: segment.startOffset,
+          endOffset: segment.endOffset,
+        })),
+    );
+  }
+
+  return visibleRanges;
+}
+
 function wrapDomRanges(root: HTMLElement, ranges: DomHighlightRange[]) {
   if (ranges.length === 0) return;
   const textNodes = collectTextNodes(root);
@@ -729,6 +836,9 @@ function wrapTextNodeSegments(node: Text, segments: TextNodeSegment[]) {
     if (segment.range.search) {
       mark.dataset.searchHit = segment.range.active ? "active" : "true";
       if (segment.range.id) mark.dataset.searchId = segment.range.id;
+    } else if (segment.range.change) {
+      mark.dataset.changeHighlight = segment.range.changeType ?? "true";
+      if (segment.range.id) mark.dataset.changeId = segment.range.id;
     } else if (segment.range.id) {
       mark.dataset.annotationId = segment.range.id;
     }
