@@ -3913,6 +3913,9 @@ button:disabled {
 }
 
 .markdown-body {
+  --markdown-table-border: color-mix(in srgb, var(--line) 68%, var(--ink) 16%);
+  --markdown-table-header-bg: color-mix(in srgb, var(--paper-strong) 86%, var(--accent) 5%);
+  --markdown-table-row-bg: color-mix(in srgb, var(--paper-strong) 34%, transparent);
   width: min(100%, var(--reader-width));
   min-height: calc(100vh - 182px);
   margin: 0 auto 34px;
@@ -3923,6 +3926,29 @@ button:disabled {
   font-size: var(--reader-font-size);
   line-height: var(--reader-line-height);
   padding: var(--reader-padding);
+}
+
+.theme-night .markdown-body,
+.theme-midnight .markdown-body,
+.theme-graphite .markdown-body,
+.theme-umber .markdown-body,
+.theme-basalt .markdown-body,
+.theme-console .markdown-body,
+.theme-amber .markdown-body,
+.theme-aurora .markdown-body,
+.theme-noir .markdown-body,
+.theme-dusk .markdown-body,
+.theme-smoke .markdown-body,
+.theme-redcockpit .markdown-body,
+.theme-inklamp .markdown-body,
+.theme-safelight .markdown-body,
+.theme-blackout .markdown-body,
+.theme-midnightissue .markdown-body,
+.theme-darkhud .markdown-body,
+.surface-ink .markdown-body {
+  --markdown-table-border: color-mix(in srgb, var(--line) 58%, var(--ink) 34%);
+  --markdown-table-header-bg: color-mix(in srgb, var(--paper-strong) 78%, var(--accent) 10%);
+  --markdown-table-row-bg: color-mix(in srgb, var(--paper-strong) 42%, transparent);
 }
 
 .chapter-bottom-nav {
@@ -4183,13 +4209,24 @@ button:disabled {
 .markdown-body table {
   width: 100%;
   border-collapse: collapse;
+  border: 1px solid var(--markdown-table-border);
   font-size: 0.92em;
 }
 
 .markdown-body th,
 .markdown-body td {
-  border: 1px solid rgba(32, 33, 29, 0.14);
+  border: 1px solid var(--markdown-table-border);
   padding: 8px 10px;
+}
+
+.markdown-body th {
+  background: var(--markdown-table-header-bg);
+  color: var(--ink);
+  font-weight: 820;
+}
+
+.markdown-body tbody tr:nth-child(even) td {
+  background: var(--markdown-table-row-bg);
 }
 
 .markdown-body img {
