@@ -1,4 +1,25 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
+import hljs from "highlight.js/lib/core";
+import bash from "highlight.js/lib/languages/bash";
+import c from "highlight.js/lib/languages/c";
+import cpp from "highlight.js/lib/languages/cpp";
+import csharp from "highlight.js/lib/languages/csharp";
+import css from "highlight.js/lib/languages/css";
+import diff from "highlight.js/lib/languages/diff";
+import go from "highlight.js/lib/languages/go";
+import ini from "highlight.js/lib/languages/ini";
+import java from "highlight.js/lib/languages/java";
+import javascript from "highlight.js/lib/languages/javascript";
+import json from "highlight.js/lib/languages/json";
+import markdownLanguage from "highlight.js/lib/languages/markdown";
+import php from "highlight.js/lib/languages/php";
+import python from "highlight.js/lib/languages/python";
+import ruby from "highlight.js/lib/languages/ruby";
+import rust from "highlight.js/lib/languages/rust";
+import sql from "highlight.js/lib/languages/sql";
+import typescript from "highlight.js/lib/languages/typescript";
+import xml from "highlight.js/lib/languages/xml";
+import yaml from "highlight.js/lib/languages/yaml";
 import MarkdownIt from "markdown-it";
 import type { Annotation } from "./types";
 
@@ -39,11 +60,39 @@ interface TextNodeSegment {
   range: DomHighlightRange;
 }
 
+registerHighlightLanguages();
+
 const md = new MarkdownIt({
   html: true,
   linkify: true,
   typographer: true,
+  highlight(code, language) {
+    return highlightCode(code, language);
+  },
 });
+
+function registerHighlightLanguages() {
+  hljs.registerLanguage("bash", bash);
+  hljs.registerLanguage("c", c);
+  hljs.registerLanguage("cpp", cpp);
+  hljs.registerLanguage("csharp", csharp);
+  hljs.registerLanguage("css", css);
+  hljs.registerLanguage("diff", diff);
+  hljs.registerLanguage("go", go);
+  hljs.registerLanguage("ini", ini);
+  hljs.registerLanguage("java", java);
+  hljs.registerLanguage("javascript", javascript);
+  hljs.registerLanguage("json", json);
+  hljs.registerLanguage("markdown", markdownLanguage);
+  hljs.registerLanguage("php", php);
+  hljs.registerLanguage("python", python);
+  hljs.registerLanguage("ruby", ruby);
+  hljs.registerLanguage("rust", rust);
+  hljs.registerLanguage("sql", sql);
+  hljs.registerLanguage("typescript", typescript);
+  hljs.registerLanguage("xml", xml);
+  hljs.registerLanguage("yaml", yaml);
+}
 
 const defaultImageRule = md.renderer.rules.image;
 const defaultFenceRule = md.renderer.rules.fence;
@@ -55,6 +104,9 @@ md.renderer.rules.image = (tokens, idx, options, env, self) => {
     const src = token.attrs[srcIndex][1];
     token.attrs[srcIndex][1] = resolveImageSrc(src, env.chapterFilePath);
   }
+  token.attrSet("data-reader-image", "true");
+  token.attrSet("draggable", "false");
+  if (token.attrIndex("loading") < 0) token.attrSet("loading", "lazy");
   return defaultImageRule
     ? defaultImageRule(tokens, idx, options, env, self)
     : self.renderToken(tokens, idx, options);
@@ -121,7 +173,7 @@ export function applyDomHighlights(
   searchHighlights?: SearchHighlight | SearchHighlight[] | null,
 ) {
   clearDomHighlights(root);
-  const rootText = root.textContent ?? "";
+  const rootText = getMarkdownReadableText(root);
   const annotationRanges = annotations
     .map((annotation) => resolveAnnotationRange(rootText, annotation))
     .filter((range): range is DomHighlightRange => Boolean(range));
@@ -242,24 +294,137 @@ export function getHeadingPath(content: string, offset: number) {
 }
 
 function resolveImageSrc(src: string, chapterFilePath?: string) {
+  const trimmedSrc = src.trim();
   if (
     !chapterFilePath ||
-    /^(https?:|data:|blob:|asset:|file:|#)/i.test(src) ||
-    src.startsWith("/")
+    !trimmedSrc ||
+    /^(https?:|data:|blob:|asset:|file:|#)/i.test(trimmedSrc)
   ) {
     return src;
   }
 
+  const separator = chapterFilePath.includes("\\") ? "\\" : "/";
   const separatorIndex = Math.max(chapterFilePath.lastIndexOf("\\"), chapterFilePath.lastIndexOf("/"));
-  if (separatorIndex < 0) return src;
+  const chapterDir = separatorIndex >= 0 ? chapterFilePath.slice(0, separatorIndex) : "";
+  const { path, suffix } = splitImageSrcSuffix(trimmedSrc);
+  const localPath = resolveLocalImagePath(path, chapterDir, separator);
+  if (!localPath) return src;
 
-  const base = chapterFilePath.slice(0, separatorIndex);
-  const joined = `${base}${chapterFilePath.includes("\\") ? "\\" : "/"}${src}`;
   try {
-    return convertFileSrc(joined);
+    return `${convertFileSrc(localPath)}${suffix}`;
   } catch {
-    return joined;
+    return `${localPath}${suffix}`;
   }
+}
+
+function highlightCode(code: string, language: string) {
+  const normalizedLanguage = normalizeCodeLanguage(language);
+  if (normalizedLanguage && hljs.getLanguage(normalizedLanguage)) {
+    try {
+      return hljs.highlight(code, {
+        language: normalizedLanguage,
+        ignoreIllegals: true,
+      }).value;
+    } catch {
+      return escapeHtml(code);
+    }
+  }
+  return escapeHtml(code);
+}
+
+function normalizeCodeLanguage(language: string) {
+  const rawLanguage = language.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+  const aliases: Record<string, string> = {
+    "c++": "cpp",
+    "c#": "csharp",
+    cjs: "javascript",
+    js: "javascript",
+    jsx: "javascript",
+    htm: "xml",
+    html: "xml",
+    md: "markdown",
+    mjs: "javascript",
+    py: "python",
+    rb: "ruby",
+    rs: "rust",
+    shell: "bash",
+    sh: "bash",
+    ts: "typescript",
+    tsx: "typescript",
+    yml: "yaml",
+  };
+  return aliases[rawLanguage] ?? rawLanguage;
+}
+
+function splitImageSrcSuffix(src: string) {
+  const queryIndex = src.indexOf("?");
+  const hashIndex = src.indexOf("#");
+  const suffixIndex = [queryIndex, hashIndex]
+    .filter((index) => index >= 0)
+    .sort((a, b) => a - b)[0];
+  if (suffixIndex === undefined) {
+    return { path: src, suffix: "" };
+  }
+  return {
+    path: src.slice(0, suffixIndex),
+    suffix: src.slice(suffixIndex),
+  };
+}
+
+function resolveLocalImagePath(rawPath: string, chapterDir: string, separator: string) {
+  const decodedPath = decodeImagePath(rawPath);
+  const localPath = isAbsoluteLocalPath(decodedPath)
+    ? decodedPath
+    : chapterDir
+      ? `${chapterDir}${separator}${decodedPath}`
+      : decodedPath;
+  return normalizeLocalFilePath(localPath, separator);
+}
+
+function decodeImagePath(path: string) {
+  try {
+    return decodeURI(path);
+  } catch {
+    return path;
+  }
+}
+
+function isAbsoluteLocalPath(path: string) {
+  return /^[a-z]:[\\/]/i.test(path) || path.startsWith("\\\\") || path.startsWith("/");
+}
+
+function normalizeLocalFilePath(path: string, preferredSeparator: string) {
+  const separator = path.includes("\\") || preferredSeparator === "\\" ? "\\" : "/";
+  let prefix = "";
+  let rest = path;
+
+  const driveMatch = /^([a-z]:)[\\/]/i.exec(path);
+  if (driveMatch) {
+    prefix = `${driveMatch[1]}${separator}`;
+    rest = path.slice(driveMatch[0].length);
+  } else if (path.startsWith("\\\\")) {
+    prefix = "\\\\";
+    rest = path.slice(2);
+  } else if (path.startsWith("/")) {
+    prefix = "/";
+    rest = path.slice(1);
+  }
+
+  const segments: string[] = [];
+  for (const segment of rest.split(/[\\/]+/)) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      if (segments.length > 0 && segments[segments.length - 1] !== "..") {
+        segments.pop();
+      } else if (!prefix) {
+        segments.push(segment);
+      }
+      continue;
+    }
+    segments.push(segment);
+  }
+
+  return `${prefix}${segments.join(separator)}`;
 }
 
 function renderMermaidPlaceholder(source: string) {

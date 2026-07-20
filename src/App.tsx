@@ -25,6 +25,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type WheelEvent as ReactWheelEvent,
   useEffect,
   useMemo,
   useRef,
@@ -146,6 +147,12 @@ interface FullscreenReveal {
   top: boolean;
   left: boolean;
   right: boolean;
+}
+
+interface ImagePreviewState {
+  src: string;
+  alt: string;
+  scale: number;
 }
 
 type ViewTransitionDocument = Document & {
@@ -346,6 +353,8 @@ export default function App() {
   const [pendingScroll, setPendingScroll] = useState<number | null>(null);
   const [noteDetailClosing, setNoteDetailClosing] = useState(false);
   const [enhancedMarkdownKey, setEnhancedMarkdownKey] = useState("");
+  const [imagePreview, setImagePreview] = useState<ImagePreviewState | null>(null);
+  const [imagePreviewClosing, setImagePreviewClosing] = useState(false);
 
   const articleRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -1443,11 +1452,48 @@ export default function App() {
 
   function handleAnnotationClick(event: React.MouseEvent<HTMLDivElement>) {
     const target = event.target as HTMLElement;
+    const image = target.closest<HTMLImageElement>("img[data-reader-image]");
+    if (image && articleRef.current?.contains(image)) {
+      event.preventDefault();
+      event.stopPropagation();
+      openImagePreview(image);
+      return;
+    }
+
     const mark = target.closest<HTMLElement>("[data-annotation-id]");
     if (mark) {
       const annotationId = mark.dataset.annotationId;
       if (annotationId) openReaderAnnotationDetail(annotationId);
     }
+  }
+
+  function openImagePreview(image: HTMLImageElement) {
+    closeSelectionContextMenu();
+    closeAnnotationMenu();
+    setImagePreviewClosing(false);
+    setImagePreview({
+      src: image.currentSrc || image.src,
+      alt: image.alt || "Markdown 图片",
+      scale: 1,
+    });
+  }
+
+  function closeImagePreview() {
+    if (!imagePreview || imagePreviewClosing) return;
+    animateClose(setImagePreviewClosing, () => setImagePreview(null));
+  }
+
+  function handleImagePreviewWheel(event: ReactWheelEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    const direction = event.deltaY < 0 ? 1 : -1;
+    setImagePreview((preview) => {
+      if (!preview) return preview;
+      return {
+        ...preview,
+        scale: clamp(preview.scale + direction * 0.16, 0.28, 5),
+      };
+    });
   }
 
   function handleAnnotationContextMenu(
@@ -2110,6 +2156,11 @@ export default function App() {
   }
 
   function closeTopModal() {
+    if (imagePreview) {
+      closeImagePreview();
+      return true;
+    }
+
     if (activeBook) {
       if (detailAnnotationId) {
         closeReaderAnnotationDetail();
@@ -2590,6 +2641,31 @@ export default function App() {
     >
       <AppTitlebar title={activeBook.name} subtitle={reader?.chapter.title ?? "AuroraMD"} />
       <TopNotice error={error} notice={notice} closing={topNoticeClosing} onClose={closeTopNotice} />
+      {imagePreview && (
+        <div
+          className={`modal-backdrop image-preview-backdrop ${
+            imagePreviewClosing ? "is-closing" : ""
+          }`}
+          role="dialog"
+          aria-modal="true"
+          aria-label={imagePreview.alt}
+          onClick={closeImagePreview}
+          onWheel={handleImagePreviewWheel}
+        >
+          <div className="image-preview-frame" onClick={(event) => event.stopPropagation()}>
+            <img
+              src={imagePreview.src}
+              alt={imagePreview.alt}
+              style={{ transform: `scale(${imagePreview.scale})` }}
+              onClick={closeImagePreview}
+              draggable={false}
+            />
+            <span className="image-preview-zoom">
+              {Math.round(imagePreview.scale * 100)}%
+            </span>
+          </div>
+        </div>
+      )}
       {isReadingFullscreen && (
         <>
           <div
