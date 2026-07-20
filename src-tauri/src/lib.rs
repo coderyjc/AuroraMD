@@ -60,6 +60,7 @@ pub fn run() {
             get_book,
             update_book_name,
             update_book_pinned,
+            mark_book_opened,
             delete_book,
             open_book_folder,
             open_chapter_in_explorer,
@@ -489,7 +490,7 @@ fn open_markdown_file(path: String, state: State<AppState>) -> AppResult<OpenMar
         }
     }
 
-    let root_path = markdown_file_root(&file_path)?;
+    let root_path = file_path.clone();
     let imported = import_book_from_files(
         &state,
         root_path,
@@ -506,7 +507,7 @@ fn open_markdown_file(path: String, state: State<AppState>) -> AppResult<OpenMar
 
 #[tauri::command]
 fn preview_import_book_folder(path: String) -> AppResult<ImportBookPreview> {
-    let (root_path, default_name, md_files) = resolve_import_preview_source(&path)?;
+    let (root_path, default_name, source_type, md_files) = resolve_import_preview_source(&path)?;
     if md_files.is_empty() {
         return Err("这个文件夹中没有找到 Markdown 文件。".to_string());
     }
@@ -540,6 +541,7 @@ fn preview_import_book_folder(path: String) -> AppResult<ImportBookPreview> {
     Ok(ImportBookPreview {
         default_name,
         root_path: path_to_string(&root_path),
+        source_type,
         files,
     })
 }
@@ -566,6 +568,7 @@ fn import_book_selection(
         return Err("请选择至少一个 Markdown 文件。".to_string());
     }
 
+    let source_type = payload.source_type.clone();
     let mut seen = HashSet::new();
     let mut md_files = Vec::new();
     for file_path in payload.file_paths {
@@ -588,7 +591,12 @@ fn import_book_selection(
         return Err("请选择至少一个 Markdown 文件。".to_string());
     }
 
-    import_book_from_files(&state, root_path, book_name, md_files)
+    let book_root_path = if source_type == "file" && md_files.len() == 1 {
+        md_files[0].clone()
+    } else {
+        root_path
+    };
+    import_book_from_files(&state, book_root_path, book_name, md_files)
 }
 
 fn resolve_import_root(path: &str) -> AppResult<PathBuf> {
@@ -600,7 +608,7 @@ fn resolve_import_root(path: &str) -> AppResult<PathBuf> {
         .map_err(|error| format!("无法解析文件夹路径：{error}"))
 }
 
-fn resolve_import_preview_source(path: &str) -> AppResult<(PathBuf, String, Vec<PathBuf>)> {
+fn resolve_import_preview_source(path: &str) -> AppResult<(PathBuf, String, String, Vec<PathBuf>)> {
     let source = PathBuf::from(path.trim());
     let source = source
         .canonicalize()
@@ -611,6 +619,7 @@ fn resolve_import_preview_source(path: &str) -> AppResult<(PathBuf, String, Vec<
         return Ok((
             source.clone(),
             default_book_name_from_path(&source),
+            "folder".to_string(),
             md_files,
         ));
     }
@@ -620,6 +629,7 @@ fn resolve_import_preview_source(path: &str) -> AppResult<(PathBuf, String, Vec<
         return Ok((
             root_path,
             markdown_book_name_from_path(&source),
+            "file".to_string(),
             vec![source],
         ));
     }
@@ -674,6 +684,32 @@ fn import_book_name_from_input(input: &str) -> String {
         .to_string()
 }
 
+fn should_relocate_legacy_standalone_book(
+    book: &Book,
+    chapters: &[Chapter],
+    requested_files: &[PathBuf],
+) -> bool {
+    if chapters.len() != 1 {
+        return false;
+    }
+
+    let root_path = PathBuf::from(&book.root_path);
+    if !root_path.is_dir() {
+        return false;
+    }
+
+    let chapter_path = PathBuf::from(&chapters[0].file_path);
+    if chapter_path.parent() != Some(root_path.as_path()) {
+        return false;
+    }
+
+    if !requested_files.iter().any(|path| path == &chapter_path) {
+        return false;
+    }
+
+    book.name.trim() == markdown_book_name_from_path(&chapter_path)
+}
+
 fn import_book_from_files(
     state: &State<AppState>,
     root_path: PathBuf,
@@ -689,7 +725,19 @@ fn import_book_from_files(
 
     if let Some(book) = get_book_by_root_path(&conn, &root_path_text)? {
         let chapters = load_chapters(&conn, &book.id)?;
-        return Ok(BookWithChapters { book, chapters });
+        if should_relocate_legacy_standalone_book(&book, &chapters, &md_files) {
+            let standalone_root_path = chapters[0].file_path.clone();
+            if get_book_by_root_path(&conn, &standalone_root_path)?.is_some() {
+                return Err("A standalone book already exists for this Markdown file.".to_string());
+            }
+            conn.execute(
+                "UPDATE books SET root_path = ?1, updated_at = ?2 WHERE id = ?3",
+                params![standalone_root_path, now(), book.id],
+            )
+            .map_err(|error| format!("Failed to migrate standalone book path: {error}"))?;
+        } else {
+            return Ok(BookWithChapters { book, chapters });
+        }
     }
 
     let now = now();
@@ -767,13 +815,14 @@ fn list_books(state: State<AppState>) -> AppResult<Vec<BookSummary>> {
                 b.is_pinned,
                 b.created_at,
                 b.updated_at,
+                b.last_opened_at,
                 COUNT(DISTINCT c.id) AS chapter_count,
                 COUNT(DISTINCT a.id) AS annotation_count
             FROM books b
             LEFT JOIN chapters c ON c.book_id = b.id
             LEFT JOIN annotations a ON a.book_id = b.id
             GROUP BY b.id
-            ORDER BY b.is_pinned DESC, b.updated_at DESC, b.created_at DESC
+            ORDER BY b.is_pinned DESC, COALESCE(b.last_opened_at, b.updated_at) DESC, b.created_at DESC
             "#,
         )
         .map_err(db_error)?;
@@ -788,8 +837,9 @@ fn list_books(state: State<AppState>) -> AppResult<Vec<BookSummary>> {
                 is_pinned: row.get::<_, i64>(4)? != 0,
                 created_at: row.get(5)?,
                 updated_at: row.get(6)?,
-                chapter_count: row.get(7)?,
-                annotation_count: row.get(8)?,
+                last_opened_at: row.get(7)?,
+                chapter_count: row.get(8)?,
+                annotation_count: row.get(9)?,
             })
         })
         .map_err(db_error)?;
@@ -836,6 +886,23 @@ fn update_book_pinned(book_id: String, is_pinned: bool, state: State<AppState>) 
 }
 
 #[tauri::command]
+fn mark_book_opened(book_id: String, state: State<AppState>) -> AppResult<Book> {
+    let conn = lock_conn(&state)?;
+    let opened_at = now();
+    let changed = conn
+        .execute(
+            "UPDATE books SET last_opened_at = ?1 WHERE id = ?2",
+            params![opened_at, book_id],
+        )
+        .map_err(|error| format!("Failed to update book open time: {error}"))?;
+    if changed == 0 {
+        Err("Book was not found.".to_string())
+    } else {
+        get_book_by_id(&conn, &book_id)
+    }
+}
+
+#[tauri::command]
 fn delete_book(book_id: String, state: State<AppState>) -> AppResult<()> {
     let conn = lock_conn(&state)?;
     let changed = conn
@@ -855,6 +922,9 @@ fn open_book_folder(book_id: String, state: State<AppState>) -> AppResult<()> {
     drop(conn);
 
     let root_path = PathBuf::from(&book.root_path);
+    if root_path.is_file() {
+        return open_file_location(&root_path);
+    }
     if !root_path.is_dir() {
         return Err("Book folder no longer exists.".to_string());
     }
@@ -1704,6 +1774,34 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
         } else {
             Ok(())
         };
+    let home_view_restore_result = if restore_result.is_ok()
+        && backup_has_column(&conn, "settings", "home_default_view")?
+        && backup_has_column(&conn, "settings", "home_table_columns")?
+    {
+        conn.execute_batch(
+            r#"
+            UPDATE settings
+            SET
+                home_default_view = (
+                    SELECT home_default_view
+                    FROM backup.settings
+                    WHERE backup.settings.id = settings.id
+                ),
+                home_table_columns = (
+                    SELECT home_table_columns
+                    FROM backup.settings
+                    WHERE backup.settings.id = settings.id
+                )
+            WHERE EXISTS (
+                SELECT 1
+                FROM backup.settings
+                WHERE backup.settings.id = settings.id
+            );
+            "#,
+        )
+    } else {
+        Ok(())
+    };
     let split_font_restore_result = if restore_result.is_ok()
         && backup_has_column(&conn, "settings", "interface_font_family")?
         && backup_has_column(&conn, "settings", "reader_font_family")?
@@ -1765,6 +1863,26 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
         } else {
             Ok(())
         };
+    let last_opened_restore_result =
+        if restore_result.is_ok() && backup_has_column(&conn, "books", "last_opened_at")? {
+            conn.execute_batch(
+                r#"
+            UPDATE books
+            SET last_opened_at = (
+                SELECT last_opened_at
+                FROM backup.books
+                WHERE backup.books.id = books.id
+            )
+            WHERE EXISTS (
+                SELECT 1
+                FROM backup.books
+                WHERE backup.books.id = books.id
+            );
+            "#,
+            )
+        } else {
+            Ok(())
+        };
     let annotation_pinned_restore_result =
         if restore_result.is_ok() && backup_has_column(&conn, "annotations", "is_pinned")? {
             conn.execute_batch(
@@ -1810,9 +1928,13 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
         .map_err(|error| format!("Failed to restore slide annotation setting: {error}"))?;
     theme_series_restore_result
         .map_err(|error| format!("Failed to restore theme series setting: {error}"))?;
+    home_view_restore_result
+        .map_err(|error| format!("Failed to restore home view settings: {error}"))?;
     split_font_restore_result
         .map_err(|error| format!("Failed to restore font settings: {error}"))?;
     pinned_restore_result.map_err(|error| format!("Failed to restore pinned books: {error}"))?;
+    last_opened_restore_result
+        .map_err(|error| format!("Failed to restore book open times: {error}"))?;
     annotation_pinned_restore_result
         .map_err(|error| format!("Failed to restore pinned annotations: {error}"))?;
     preset_restore_result.map_err(|error| format!("Failed to restore export presets: {error}"))?;
@@ -1859,7 +1981,9 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
             border_style = ?12,
             focus_mode = ?13,
             slide_annotate = ?14,
-            shortcut_bindings = ?15
+            home_default_view = ?15,
+            home_table_columns = ?16,
+            shortcut_bindings = ?17
         WHERE id = 1
         "#,
         params![
@@ -1879,6 +2003,12 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
             patch.border_style.unwrap_or(current.border_style),
             patch.focus_mode.unwrap_or(current.focus_mode),
             patch.slide_annotate.unwrap_or(current.slide_annotate),
+            patch
+                .home_default_view
+                .unwrap_or(current.home_default_view),
+            patch
+                .home_table_columns
+                .unwrap_or(current.home_table_columns),
             patch.shortcut_bindings.unwrap_or(current.shortcut_bindings)
         ],
     )
@@ -2045,11 +2175,15 @@ fn collapse_excerpt_whitespace(value: &str) -> String {
 fn sync_book_folder_inner(conn: &mut Connection, book_id: &str) -> AppResult<FolderSyncReport> {
     let book = get_book_by_id(conn, book_id)?;
     let root_path = PathBuf::from(&book.root_path);
-    if !root_path.is_dir() {
+    let scanned_files = if root_path.is_dir() {
+        scan_markdown_files(&root_path)?
+    } else if root_path.is_file() && is_markdown_path(&root_path) {
+        vec![root_path
+            .canonicalize()
+            .map_err(|error| format!("Failed to resolve Markdown file: {error}"))?]
+    } else {
         return Err("Book root folder is missing.".to_string());
-    }
-
-    let scanned_files = scan_markdown_files(&root_path)?;
+    };
     let chapters = load_chapters(conn, book_id)?;
     let existing_paths = chapters
         .iter()
@@ -2279,7 +2413,7 @@ fn read_chapter_payload(
 
 fn get_book_by_root_path(conn: &Connection, root_path: &str) -> AppResult<Option<Book>> {
     conn.query_row(
-        "SELECT id, name, root_path, view_mode, is_pinned, created_at, updated_at FROM books WHERE root_path = ?1",
+        "SELECT id, name, root_path, view_mode, is_pinned, created_at, updated_at, last_opened_at FROM books WHERE root_path = ?1",
         params![root_path],
         map_book,
     )
@@ -2292,10 +2426,11 @@ fn find_book_for_markdown_file(conn: &Connection, file_path: &Path) -> AppResult
     if let Some(book) = conn
         .query_row(
             r#"
-            SELECT b.id, b.name, b.root_path, b.view_mode, b.is_pinned, b.created_at, b.updated_at
+            SELECT b.id, b.name, b.root_path, b.view_mode, b.is_pinned, b.created_at, b.updated_at, b.last_opened_at
             FROM books b
             INNER JOIN chapters c ON c.book_id = b.id
             WHERE c.file_path = ?1
+            ORDER BY CASE WHEN b.root_path = ?1 THEN 0 ELSE 1 END, b.updated_at DESC
             LIMIT 1
             "#,
             params![file_path_text],
@@ -2309,7 +2444,7 @@ fn find_book_for_markdown_file(conn: &Connection, file_path: &Path) -> AppResult
 
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, root_path, view_mode, is_pinned, created_at, updated_at FROM books",
+            "SELECT id, name, root_path, view_mode, is_pinned, created_at, updated_at, last_opened_at FROM books",
         )
         .map_err(db_error)?;
     let rows = stmt.query_map([], map_book).map_err(db_error)?;
@@ -2336,7 +2471,7 @@ fn find_book_for_markdown_file(conn: &Connection, file_path: &Path) -> AppResult
 
 fn get_book_by_id(conn: &Connection, book_id: &str) -> AppResult<Book> {
     conn.query_row(
-        "SELECT id, name, root_path, view_mode, is_pinned, created_at, updated_at FROM books WHERE id = ?1",
+        "SELECT id, name, root_path, view_mode, is_pinned, created_at, updated_at, last_opened_at FROM books WHERE id = ?1",
         params![book_id],
         map_book,
     )
@@ -2698,6 +2833,8 @@ fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
             border_style,
             focus_mode,
             slide_annotate,
+            home_default_view,
+            home_table_columns,
             shortcut_bindings
         FROM settings
         WHERE id = 1
@@ -2719,7 +2856,9 @@ fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
                 border_style: row.get(11)?,
                 focus_mode: row.get(12)?,
                 slide_annotate: row.get(13)?,
-                shortcut_bindings: row.get(14)?,
+                home_default_view: row.get(14)?,
+                home_table_columns: row.get(15)?,
+                shortcut_bindings: row.get(16)?,
             })
         },
     )
@@ -2828,6 +2967,7 @@ fn map_book(row: &rusqlite::Row<'_>) -> rusqlite::Result<Book> {
         is_pinned: row.get::<_, i64>(4)? != 0,
         created_at: row.get(5)?,
         updated_at: row.get(6)?,
+        last_opened_at: row.get(7)?,
     })
 }
 

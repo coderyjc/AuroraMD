@@ -70,6 +70,10 @@ export async function updateBookPinned(bookId: string, isPinned: boolean) {
   return invoke<Book>("update_book_pinned", { bookId, isPinned });
 }
 
+export async function markBookOpened(bookId: string) {
+  return invoke<Book>("mark_book_opened", { bookId });
+}
+
 export async function deleteBook(bookId: string) {
   return invoke<void>("delete_book", { bookId });
 }

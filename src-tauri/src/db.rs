@@ -13,7 +13,8 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
             view_mode TEXT NOT NULL DEFAULT 'grid',
             is_pinned INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            updated_at TEXT NOT NULL,
+            last_opened_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS chapters (
@@ -95,6 +96,8 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
             border_style TEXT NOT NULL,
             focus_mode INTEGER NOT NULL DEFAULT 0,
             slide_annotate INTEGER NOT NULL DEFAULT 0,
+            home_default_view TEXT NOT NULL DEFAULT 'grid',
+            home_table_columns TEXT NOT NULL DEFAULT '{"rowNumber":true,"chapterCount":true,"annotationCount":true,"createdAt":true,"lastOpenedAt":true}',
             shortcut_bindings TEXT NOT NULL
         );
 
@@ -115,6 +118,12 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
         "books",
         "is_pinned",
         "ALTER TABLE books ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(
+        &conn,
+        "books",
+        "last_opened_at",
+        "ALTER TABLE books ADD COLUMN last_opened_at TEXT",
     )?;
     ensure_column(
         &conn,
@@ -179,6 +188,18 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
     ensure_column(
         &conn,
         "settings",
+        "home_default_view",
+        "ALTER TABLE settings ADD COLUMN home_default_view TEXT NOT NULL DEFAULT 'grid'",
+    )?;
+    ensure_column(
+        &conn,
+        "settings",
+        "home_table_columns",
+        "ALTER TABLE settings ADD COLUMN home_table_columns TEXT NOT NULL DEFAULT '{\"rowNumber\":true,\"chapterCount\":true,\"annotationCount\":true,\"createdAt\":true,\"lastOpenedAt\":true}'",
+    )?;
+    ensure_column(
+        &conn,
+        "settings",
         "shortcut_bindings",
         "ALTER TABLE settings ADD COLUMN shortcut_bindings TEXT NOT NULL DEFAULT '{\"search\":\"Ctrl+K\",\"nextChapter\":\"N\",\"previousChapter\":\"P\",\"highlight\":\"H\",\"export\":\"E\",\"toggleLeft\":\"[\",\"toggleRight\":\"]\"}'",
     )?;
@@ -239,8 +260,10 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
             border_style,
             focus_mode,
             slide_annotate,
+            home_default_view,
+            home_table_columns,
             shortcut_bindings
-        ) VALUES (1, 100, 'classic', 'paper', 'Literata, Georgia, serif', '"IBM Plex Sans", "Segoe UI", "Microsoft YaHei", sans-serif', 'Literata, Georgia, serif', 18, 1.72, 820, 52, 18, 'warm', 'hairline', 0, 0, '{"search":"Ctrl+K","nextChapter":"N","previousChapter":"P","highlight":"H","export":"E","toggleLeft":"[","toggleRight":"]"}')
+        ) VALUES (1, 100, 'classic', 'paper', 'Literata, Georgia, serif', '"IBM Plex Sans", "Segoe UI", "Microsoft YaHei", sans-serif', 'Literata, Georgia, serif', 18, 1.72, 820, 52, 18, 'warm', 'hairline', 0, 0, 'grid', '{"rowNumber":true,"chapterCount":true,"annotationCount":true,"createdAt":true,"lastOpenedAt":true}', '{"search":"Ctrl+K","nextChapter":"N","previousChapter":"P","highlight":"H","export":"E","toggleLeft":"[","toggleRight":"]"}')
         "#,
         [],
     )?;

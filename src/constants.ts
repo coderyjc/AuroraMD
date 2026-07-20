@@ -1,4 +1,4 @@
-import type { AppSettings, ShortcutBindings } from "./types";
+import type { AppSettings, HomeTableColumnKey, ShortcutBindings } from "./types";
 
 export const highlightColors = ["#f7d86a", "#83d9b7", "#f2a0a1", "#9db7ff", "#d7b7ff"];
 
@@ -657,6 +657,22 @@ export const defaultShortcutBindings: ShortcutBindings = {
   toggleRight: "]",
 };
 
+export const homeTableColumnOptions = [
+  { id: "rowNumber", label: "行号", description: "显示当前排序后的序号。" },
+  { id: "chapterCount", label: "章节数量", description: "显示书籍内 Markdown 章节数量。" },
+  { id: "annotationCount", label: "批注数量", description: "显示书籍累计批注数量。" },
+  { id: "createdAt", label: "上传时间", description: "显示书籍导入到 AuroraMD 的时间。" },
+  { id: "lastOpenedAt", label: "打开时间", description: "显示最近一次打开这本书的时间。" },
+] satisfies Array<{ id: HomeTableColumnKey; label: string; description: string }>;
+
+export const defaultHomeTableColumns: Record<HomeTableColumnKey, boolean> = {
+  rowNumber: true,
+  chapterCount: true,
+  annotationCount: true,
+  createdAt: true,
+  lastOpenedAt: true,
+};
+
 export const defaultSettings: AppSettings = {
   annotationContextChars: 100,
   themeSeries: "classic",
@@ -672,5 +688,7 @@ export const defaultSettings: AppSettings = {
   borderStyle: "hairline",
   focusMode: false,
   slideAnnotate: false,
+  homeDefaultView: "grid",
+  homeTableColumns: JSON.stringify(defaultHomeTableColumns),
   shortcutBindings: JSON.stringify(defaultShortcutBindings),
 };

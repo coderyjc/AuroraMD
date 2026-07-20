@@ -12,6 +12,7 @@ pub struct Book {
     pub is_pinned: bool,
     pub created_at: String,
     pub updated_at: String,
+    pub last_opened_at: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -24,6 +25,7 @@ pub struct BookSummary {
     pub is_pinned: bool,
     pub created_at: String,
     pub updated_at: String,
+    pub last_opened_at: Option<String>,
     pub chapter_count: i64,
     pub annotation_count: i64,
 }
@@ -147,6 +149,7 @@ pub struct ImportPreviewFile {
 pub struct ImportBookPreview {
     pub root_path: String,
     pub default_name: String,
+    pub source_type: String,
     pub files: Vec<ImportPreviewFile>,
 }
 
@@ -155,6 +158,7 @@ pub struct ImportBookPreview {
 pub struct ImportBookPayload {
     pub root_path: String,
     pub book_name: String,
+    pub source_type: String,
     pub file_paths: Vec<String>,
 }
 
@@ -224,6 +228,8 @@ pub struct AppSettings {
     pub border_style: String,
     pub focus_mode: bool,
     pub slide_annotate: bool,
+    pub home_default_view: String,
+    pub home_table_columns: String,
     pub shortcut_bindings: String,
 }
 
@@ -266,6 +272,8 @@ pub struct SettingsPatch {
     pub border_style: Option<String>,
     pub focus_mode: Option<bool>,
     pub slide_annotate: Option<bool>,
+    pub home_default_view: Option<String>,
+    pub home_table_columns: Option<String>,
     pub shortcut_bindings: Option<String>,
 }
 

@@ -6,6 +6,7 @@ export interface Book {
   isPinned: boolean;
   createdAt: string;
   updatedAt: string;
+  lastOpenedAt: string | null;
 }
 
 export interface BookSummary extends Book {
@@ -112,14 +113,18 @@ export interface ImportPreviewFile {
 export interface ImportBookPreview {
   rootPath: string;
   defaultName: string;
+  sourceType: ImportSourceType;
   files: ImportPreviewFile[];
 }
 
 export interface ImportBookPayload {
   rootPath: string;
   bookName: string;
+  sourceType: ImportSourceType;
   filePaths: string[];
 }
+
+export type ImportSourceType = "file" | "folder";
 
 export interface OpenMarkdownFileResult {
   book: Book;
@@ -142,8 +147,21 @@ export interface AppSettings {
   borderStyle: string;
   focusMode: boolean;
   slideAnnotate: boolean;
+  homeDefaultView: HomeLibraryView;
+  homeTableColumns: string;
   shortcutBindings: string;
 }
+
+export type HomeLibraryView = "grid" | "table";
+
+export type HomeView = HomeLibraryView | "notes";
+
+export type HomeTableColumnKey =
+  | "rowNumber"
+  | "chapterCount"
+  | "annotationCount"
+  | "createdAt"
+  | "lastOpenedAt";
 
 export interface SystemFont {
   family: string;

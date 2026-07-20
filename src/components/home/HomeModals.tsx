@@ -14,10 +14,12 @@ import {
 } from "../../api";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
+  defaultHomeTableColumns,
   defaultShortcutBindings,
   getEffectiveThemeSeries,
   getDefaultThemeForSeries,
   getThemesForSeries,
+  homeTableColumnOptions,
   visibleThemeSeriesOptions,
 } from "../../constants";
 import { FontPicker } from "../FontPicker";
@@ -35,6 +37,7 @@ import type {
   ExportPresetPayload,
   ExportTemplate,
   FolderSyncReport,
+  HomeTableColumnKey,
   ImportBookPreview,
   ImportPreviewFile,
   NoteItem,
@@ -80,6 +83,21 @@ interface VersionDiffResult {
 }
 
 type HomeSettingsCategory = "appearance" | "features" | "shortcuts" | "prompts" | "backup" | "about";
+
+function parseHomeTableColumns(value: string): Record<HomeTableColumnKey, boolean> {
+  try {
+    const parsed = JSON.parse(value) as Partial<Record<HomeTableColumnKey, unknown>>;
+    return {
+      rowNumber: parsed.rowNumber === undefined ? true : Boolean(parsed.rowNumber),
+      chapterCount: parsed.chapterCount === undefined ? true : Boolean(parsed.chapterCount),
+      annotationCount: parsed.annotationCount === undefined ? true : Boolean(parsed.annotationCount),
+      createdAt: parsed.createdAt === undefined ? true : Boolean(parsed.createdAt),
+      lastOpenedAt: parsed.lastOpenedAt === undefined ? true : Boolean(parsed.lastOpenedAt),
+    };
+  } catch {
+    return defaultHomeTableColumns;
+  }
+}
 
 interface AnnotationLocationCheck {
   annotation: Annotation;
@@ -305,6 +323,58 @@ export function DeleteBookModal({
             <Trash2 size={16} /> 确认删除
           </button>
         </div>
+      </section>
+    </div>
+  );
+}
+
+export function DeleteBooksModal({
+  closing,
+  books,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  closing: boolean;
+  books: BookSummary[];
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div
+      className={`modal-backdrop ${closing ? "is-closing" : ""}`}
+      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+    >
+      <section className="annotation-modal compact-modal" onMouseDown={(event) => event.stopPropagation()}>
+        <header>
+          <div>
+            <p className="eyebrow danger-eyebrow">Danger Zone</p>
+            <h2>删除选中书籍</h2>
+          </div>
+          <button className="icon-button" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </header>
+        <div className="delete-book-warning">
+          <AlertTriangle size={22} />
+          <div>
+            <strong>将删除 {books.length} 本书籍的本地索引。</strong>
+            <p>不会删除原始 Markdown 文件，但相关章节索引、版本记录和批注会从 AuroraMD 中移除。</p>
+          </div>
+        </div>
+        <div className="delete-book-list">
+          {books.slice(0, 8).map((book) => (
+            <span key={book.id}>{book.name}</span>
+          ))}
+          {books.length > 8 && <small>还有 {books.length - 8} 本未显示</small>}
+        </div>
+        <footer className="modal-actions">
+          <button onClick={onClose}>取消</button>
+          <button className="danger" onClick={onConfirm} disabled={busy}>
+            <Trash2 size={15} /> {busy ? "删除中" : "确认删除"}
+          </button>
+        </footer>
       </section>
     </div>
   );
@@ -781,6 +851,15 @@ export function HomeSettingsModal({
     visibleThemeSeriesOptions.find((series) => series.id === activeThemeSeries) ??
     visibleThemeSeriesOptions[0];
   const availableThemes = getThemesForSeries(activeThemeSeries);
+  const tableColumns = parseHomeTableColumns(settings.homeTableColumns);
+  const setTableColumnVisible = (column: HomeTableColumnKey, visible: boolean) => {
+    onChange({
+      homeTableColumns: JSON.stringify({
+        ...tableColumns,
+        [column]: visible,
+      }),
+    });
+  };
 
   useEffect(() => {
     if (!editingPresetId) return;
@@ -878,6 +957,54 @@ export function HomeSettingsModal({
           <main className="home-settings-content" aria-label={activeCategoryLabel}>
             {activeCategory === "appearance" && (
               <div className="settings-pane">
+                <section className="settings-section">
+                  <h3>
+                    <BookOpen size={16} /> 默认首页视图
+                  </h3>
+                  <div className="home-view-choice-grid">
+                    <button
+                      type="button"
+                      className={settings.homeDefaultView === "grid" ? "active" : ""}
+                      onClick={() => onChange({ homeDefaultView: "grid" })}
+                    >
+                      <strong>Gallery</strong>
+                      <small>默认以封面卡片展示书籍。</small>
+                    </button>
+                    <button
+                      type="button"
+                      className={settings.homeDefaultView === "table" ? "active" : ""}
+                      onClick={() => onChange({ homeDefaultView: "table" })}
+                    >
+                      <strong>列表</strong>
+                      <small>默认以可排序表格展示书籍。</small>
+                    </button>
+                  </div>
+                </section>
+
+                <section className="settings-section">
+                  <h3>
+                    <GripVertical size={16} /> 表格列显示
+                  </h3>
+                  <div className="table-column-toggle-grid">
+                    {homeTableColumnOptions.map((column) => (
+                      <label className="settings-toggle compact" key={column.id}>
+                        <span>
+                          <strong>{column.label}</strong>
+                          <small>{column.description}</small>
+                        </span>
+                        <input
+                          type="checkbox"
+                          checked={tableColumns[column.id]}
+                          onChange={(event) =>
+                            setTableColumnVisible(column.id, event.target.checked)
+                          }
+                        />
+                        <i aria-hidden="true" />
+                      </label>
+                    ))}
+                  </div>
+                </section>
+
                 <section className="settings-section">
                   <h3>
                     <Palette size={16} /> 主题

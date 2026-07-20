@@ -7,6 +7,7 @@ import {
   FolderPlus,
   Grid3X3,
   Highlighter,
+  List,
   Maximize2,
   MessageSquare,
   Minimize2,
@@ -18,6 +19,7 @@ import {
   Search,
   Settings,
   Square,
+  Trash2,
   X,
 } from "lucide-react";
 import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
@@ -52,12 +54,14 @@ import {
   listExportPresets,
   listNoteItems,
   listSystemFonts,
+  markBookOpened,
   markAnnotationsStatus,
   openBookFolder,
   openChapterInExplorer,
   openMarkdownFile,
   openProjectRepository,
   pickBookFolder,
+  pickMarkdownFiles,
   previewImportBookFolder,
   readChapter,
   readChapterVersion,
@@ -78,6 +82,7 @@ import {
   BookContextMenu,
   type BookMenuState,
   DeleteBookModal,
+  DeleteBooksModal,
   HomeSettingsModal,
   ImportBookModal,
   NoteDetailModal,
@@ -100,7 +105,13 @@ import {
   TopNotice,
   type SelectionDraft,
 } from "./components/reader/ReaderComponents";
-import { defaultSettings, getDefaultThemeForSeries, getEffectiveThemeSeries, highlightColors } from "./constants";
+import {
+  defaultHomeTableColumns,
+  defaultSettings,
+  getDefaultThemeForSeries,
+  getEffectiveThemeSeries,
+  highlightColors,
+} from "./constants";
 import {
   applyDomHighlights,
   findSelectionOffset,
@@ -127,6 +138,9 @@ import type {
   ExportTaskGoal,
   ExportTemplate,
   FolderSyncReport,
+  HomeLibraryView,
+  HomeTableColumnKey,
+  HomeView,
   ImportBookPreview,
   NoteItem,
   ReadChapterResponse,
@@ -167,6 +181,44 @@ interface ImagePreviewState {
 
 type ViewTransitionDocument = Document & {
   startViewTransition?: (callback: () => void) => { finished: Promise<void> };
+};
+
+type BookTableSortKey = "name" | "chapterCount" | "annotationCount" | "createdAt" | "lastOpenedAt";
+type SortDirection = "asc" | "desc";
+type BookTableResizableColumnKey = HomeTableColumnKey | "name";
+
+interface BookTableSortState {
+  key: BookTableSortKey;
+  direction: SortDirection;
+}
+
+const defaultBookTableSort: BookTableSortState = { key: "lastOpenedAt", direction: "desc" };
+
+const defaultBookTableColumnWidths: Record<BookTableResizableColumnKey, number> = {
+  rowNumber: 72,
+  name: 360,
+  chapterCount: 116,
+  annotationCount: 116,
+  createdAt: 156,
+  lastOpenedAt: 156,
+};
+
+const bookTableColumnMinWidths: Record<BookTableResizableColumnKey, number> = {
+  rowNumber: 56,
+  name: 220,
+  chapterCount: 96,
+  annotationCount: 96,
+  createdAt: 128,
+  lastOpenedAt: 128,
+};
+
+const bookTableColumnMaxWidths: Record<BookTableResizableColumnKey, number> = {
+  rowNumber: 120,
+  name: 620,
+  chapterCount: 180,
+  annotationCount: 180,
+  createdAt: 240,
+  lastOpenedAt: 240,
 };
 
 const uiExitMs = 150;
@@ -268,9 +320,52 @@ function deriveImportBookName(preview: ImportBookPreview, filePaths: string[]) {
   return preview.defaultName;
 }
 
+function normalizeHomeLibraryView(value: string): HomeLibraryView {
+  return value === "table" ? "table" : "grid";
+}
+
+function parseHomeTableColumns(value: string): Record<HomeTableColumnKey, boolean> {
+  try {
+    const parsed = JSON.parse(value) as Partial<Record<HomeTableColumnKey, unknown>>;
+    return {
+      rowNumber: parsed.rowNumber === undefined ? true : Boolean(parsed.rowNumber),
+      chapterCount: parsed.chapterCount === undefined ? true : Boolean(parsed.chapterCount),
+      annotationCount: parsed.annotationCount === undefined ? true : Boolean(parsed.annotationCount),
+      createdAt: parsed.createdAt === undefined ? true : Boolean(parsed.createdAt),
+      lastOpenedAt: parsed.lastOpenedAt === undefined ? true : Boolean(parsed.lastOpenedAt),
+    };
+  } catch {
+    return defaultHomeTableColumns;
+  }
+}
+
+function formatBookDate(value?: string | null) {
+  if (!value) return "未记录";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "未记录";
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function compareBookValues(left: BookSummary, right: BookSummary, key: BookTableSortKey) {
+  if (key === "name") {
+    return left.name.localeCompare(right.name, "zh-CN", { numeric: true, sensitivity: "base" });
+  }
+  if (key === "chapterCount") return left.chapterCount - right.chapterCount;
+  if (key === "annotationCount") return left.annotationCount - right.annotationCount;
+  const leftTime = new Date(key === "createdAt" ? left.createdAt : left.lastOpenedAt ?? "").getTime();
+  const rightTime = new Date(key === "createdAt" ? right.createdAt : right.lastOpenedAt ?? "").getTime();
+  return (Number.isNaN(leftTime) ? 0 : leftTime) - (Number.isNaN(rightTime) ? 0 : rightTime);
+}
+
 export default function App() {
   const [books, setBooks] = useState<BookSummary[]>([]);
-  const [homeView, setHomeView] = useState<"grid" | "notes">("grid");
+  const [homeView, setHomeView] = useState<HomeView>(defaultSettings.homeDefaultView);
   const [notes, setNotes] = useState<NoteItem[]>([]);
   const [exportPresets, setExportPresets] = useState<ExportPreset[]>([]);
   const [workbenchBookId, setWorkbenchBookId] = useState("all");
@@ -304,6 +399,12 @@ export default function App() {
   const [renameBookClosing, setRenameBookClosing] = useState(false);
   const [deleteBookDraft, setDeleteBookDraft] = useState<BookSummary | null>(null);
   const [deleteBookClosing, setDeleteBookClosing] = useState(false);
+  const [batchDeleteBookDraft, setBatchDeleteBookDraft] = useState<BookSummary[] | null>(null);
+  const [batchDeleteBookClosing, setBatchDeleteBookClosing] = useState(false);
+  const [selectedBookIds, setSelectedBookIds] = useState<string[]>([]);
+  const [bookTableSort, setBookTableSort] = useState<BookTableSortState>(defaultBookTableSort);
+  const [bookTableColumnWidths, setBookTableColumnWidths] = useState(defaultBookTableColumnWidths);
+  const [bookTableUploadOpen, setBookTableUploadOpen] = useState(false);
   const [syncReport, setSyncReport] = useState<FolderSyncReport | null>(null);
   const [syncReportClosing, setSyncReportClosing] = useState(false);
   const [versionManagerBook, setVersionManagerBook] = useState<BookSummary | null>(null);
@@ -386,6 +487,18 @@ export default function App() {
   useEffect(() => {
     void boot();
   }, []);
+
+  useEffect(() => {
+    const existingBookIds = new Set(books.map((book) => book.id));
+    setSelectedBookIds((current) => current.filter((bookId) => existingBookIds.has(bookId)));
+  }, [books]);
+
+  useEffect(() => {
+    if (!bookTableUploadOpen) return;
+    const close = () => setBookTableUploadOpen(false);
+    window.addEventListener("pointerdown", close);
+    return () => window.removeEventListener("pointerdown", close);
+  }, [bookTableUploadOpen]);
 
   useEffect(() => {
     const appWindow = getCurrentWindow();
@@ -546,7 +659,7 @@ export default function App() {
           const shouldImport = isImportDropPosition(payload.position);
           setImportDragActive(false);
           if (shouldImport && payload.paths[0]) {
-            void importFolderPath(payload.paths[0]);
+            void importDroppedPaths(payload.paths);
           }
         }
       })
@@ -909,6 +1022,37 @@ export default function App() {
     [filteredNotes, selectedNoteIds],
   );
 
+  const homeTableColumns = useMemo(
+    () => parseHomeTableColumns(settings.homeTableColumns),
+    [settings.homeTableColumns],
+  );
+
+  const sortedBooks = useMemo(() => {
+    return [...books].sort((left, right) => {
+      if (left.isPinned !== right.isPinned) return left.isPinned ? -1 : 1;
+      const direction = bookTableSort.direction === "asc" ? 1 : -1;
+      const value = compareBookValues(left, right, bookTableSort.key) * direction;
+      if (value !== 0) return value;
+      return left.name.localeCompare(right.name, "zh-CN", { numeric: true, sensitivity: "base" });
+    });
+  }, [bookTableSort, books]);
+
+  const selectedBooks = useMemo(
+    () => books.filter((book) => selectedBookIds.includes(book.id)),
+    [books, selectedBookIds],
+  );
+
+  const bookTableGridTemplate = useMemo(() => {
+    const columns = ["42px"];
+    if (homeTableColumns.rowNumber) columns.push(`${bookTableColumnWidths.rowNumber}px`);
+    columns.push(`${bookTableColumnWidths.name}px`);
+    if (homeTableColumns.chapterCount) columns.push(`${bookTableColumnWidths.chapterCount}px`);
+    if (homeTableColumns.annotationCount) columns.push(`${bookTableColumnWidths.annotationCount}px`);
+    if (homeTableColumns.createdAt) columns.push(`${bookTableColumnWidths.createdAt}px`);
+    if (homeTableColumns.lastOpenedAt) columns.push(`${bookTableColumnWidths.lastOpenedAt}px`);
+    return columns.join(" ");
+  }, [bookTableColumnWidths, homeTableColumns]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && closeTopModal()) {
@@ -1018,6 +1162,7 @@ export default function App() {
       ]);
       setBooks(nextBooks);
       setSettings(nextSettings);
+      setHomeView(normalizeHomeLibraryView(nextSettings.homeDefaultView));
       setNotes(nextNotes);
       setExportPresets(nextExportPresets);
       setSystemFonts(nextSystemFonts);
@@ -1063,13 +1208,28 @@ export default function App() {
     }
   }
 
-  async function importFolderPath(path: string) {
-    const folderPath = path.trim();
-    if (!folderPath || busy) return;
+  async function handleChooseMarkdownFiles() {
     setError("");
     setBusy(true);
     try {
-      await openImportPreview(folderPath);
+      const selected = await pickMarkdownFiles();
+      if (selected[0]) {
+        await openImportPreview(selected[0], selected);
+      }
+    } catch (err) {
+      setError(readError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function importDroppedPaths(paths: string[]) {
+    const importPaths = paths.map((path) => path.trim()).filter(Boolean);
+    if (!importPaths[0] || busy) return;
+    setError("");
+    setBusy(true);
+    try {
+      await openImportPreview(importPaths[0], importPaths);
     } catch (err) {
       setError(readError(err));
     } finally {
@@ -1087,13 +1247,17 @@ export default function App() {
     return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
   }
 
-  async function openImportPreview(path: string) {
+  async function openImportPreview(path: string, preferredFilePaths?: string[]) {
     const preview = await previewImportBookFolder(path);
-    const initialFilePaths = preview.files.map((file) => file.path);
+    const preferredSet = new Set(preferredFilePaths?.map((filePath) => filePath.trim()).filter(Boolean));
+    const initialFilePaths = preferredSet.size
+      ? preview.files.filter((file) => preferredSet.has(file.path)).map((file) => file.path)
+      : preview.files.map((file) => file.path);
+    const selectedPaths = initialFilePaths.length ? initialFilePaths : preview.files.map((file) => file.path);
     setImportPreview(preview);
     setImportBookNameEdited(false);
-    setImportBookName(deriveImportBookName(preview, initialFilePaths));
-    setSelectedImportFilePaths(initialFilePaths);
+    setImportBookName(deriveImportBookName(preview, selectedPaths));
+    setSelectedImportFilePaths(selectedPaths);
     setImportModalClosing(false);
   }
 
@@ -1117,6 +1281,7 @@ export default function App() {
       const imported = await importBookSelection({
         rootPath: importPreview.rootPath,
         bookName: importBookName.trim(),
+        sourceType: importPreview.sourceType,
         filePaths: selectedImportFilePaths,
       });
       await refreshBooks();
@@ -1146,6 +1311,16 @@ export default function App() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function recordBookOpened(bookId: string) {
+    const openedBook = await markBookOpened(bookId);
+    setBooks((current) =>
+      current.map((item) =>
+        item.id === openedBook.id ? { ...item, lastOpenedAt: openedBook.lastOpenedAt } : item,
+      ),
+    );
+    return openedBook;
   }
 
   async function openBook(book: ReaderBook, targetChapterId?: string) {
@@ -1182,8 +1357,9 @@ export default function App() {
           setPendingScroll(0);
         }
       }
+      const openedBook = await recordBookOpened(book.id);
       runViewTransition(() => {
-        setActiveBook(book);
+        setActiveBook({ ...book, lastOpenedAt: openedBook.lastOpenedAt });
         setChapters(nextChapters);
         setReader(nextReader);
       });
@@ -1211,9 +1387,12 @@ export default function App() {
         readChapter(note.chapterId),
       );
       const book = books.find((item) => item.id === note.bookId);
+      const openedBook = await recordBookOpened(note.bookId).catch(() => null);
       runViewTransition(() => {
         setActiveBook(
-          book ?? {
+          book
+            ? { ...book, lastOpenedAt: openedBook?.lastOpenedAt ?? book.lastOpenedAt }
+            : {
             id: note.bookId,
             name: note.bookName,
             rootPath: "",
@@ -1221,6 +1400,7 @@ export default function App() {
             isPinned: false,
             createdAt: note.createdAt,
             updatedAt: note.updatedAt,
+            lastOpenedAt: openedBook?.lastOpenedAt ?? null,
             chapterCount: nextChapters.length,
             annotationCount: notes.filter((item) => item.bookId === note.bookId).length,
           },
@@ -1255,9 +1435,12 @@ export default function App() {
         readChapter(result.chapterId),
       );
       const book = books.find((item) => item.id === result.bookId);
+      const openedBook = await recordBookOpened(result.bookId).catch(() => null);
       runViewTransition(() => {
         setActiveBook(
-          book ?? {
+          book
+            ? { ...book, lastOpenedAt: openedBook?.lastOpenedAt ?? book.lastOpenedAt }
+            : {
             id: result.bookId,
             name: result.bookName,
             rootPath: "",
@@ -1265,6 +1448,7 @@ export default function App() {
             isPinned: false,
             createdAt: "",
             updatedAt: "",
+            lastOpenedAt: openedBook?.lastOpenedAt ?? null,
             chapterCount: nextChapters.length,
             annotationCount: notes.filter((item) => item.bookId === result.bookId).length,
           },
@@ -2014,6 +2198,7 @@ export default function App() {
     try {
       await deleteBook(deletedBook.id);
       closeDeleteBookModal();
+      setSelectedBookIds((current) => current.filter((bookId) => bookId !== deletedBook.id));
       if (workbenchBookId === deletedBook.id) {
         setWorkbenchBookId("all");
         setWorkbenchChapterId("all");
@@ -2021,6 +2206,32 @@ export default function App() {
       }
       await Promise.all([refreshBooks(), refreshNotes()]);
       setNotice(`已删除《${deletedBook.name}》的本地索引。`);
+    } catch (err) {
+      setError(readError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmBatchDeleteBooks() {
+    if (!batchDeleteBookDraft?.length) return;
+    const deletedBooks = batchDeleteBookDraft;
+    const deletedIds = new Set(deletedBooks.map((book) => book.id));
+    setBusy(true);
+    setError("");
+    try {
+      for (const book of deletedBooks) {
+        await deleteBook(book.id);
+      }
+      closeBatchDeleteBooksModal();
+      setSelectedBookIds([]);
+      if (workbenchBookId !== "all" && deletedIds.has(workbenchBookId)) {
+        setWorkbenchBookId("all");
+        setWorkbenchChapterId("all");
+        setSelectedNoteIds([]);
+      }
+      await Promise.all([refreshBooks(), refreshNotes()]);
+      setNotice(`已删除 ${deletedBooks.length} 本书籍的本地索引。`);
     } catch (err) {
       setError(readError(err));
     } finally {
@@ -2043,6 +2254,61 @@ export default function App() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function setHomeLibraryView(view: HomeLibraryView) {
+    runViewTransition(() => setHomeView(view));
+  }
+
+  function toggleBookTableSort(key: BookTableSortKey) {
+    setBookTableSort((current) =>
+      current.key === key
+        ? { key, direction: current.direction === "asc" ? "desc" : "asc" }
+        : { key, direction: key === "name" ? "asc" : "desc" },
+    );
+  }
+
+  function toggleBookSelection(bookId: string) {
+    setSelectedBookIds((current) =>
+      current.includes(bookId) ? current.filter((id) => id !== bookId) : [...current, bookId],
+    );
+  }
+
+  function toggleAllTableBooks() {
+    const tableBookIds = sortedBooks.map((book) => book.id);
+    const allSelected =
+      tableBookIds.length > 0 && tableBookIds.every((bookId) => selectedBookIds.includes(bookId));
+    setSelectedBookIds(allSelected ? [] : tableBookIds);
+  }
+
+  function openBatchDeleteBooksModal() {
+    if (!selectedBooks.length) return;
+    setBatchDeleteBookClosing(false);
+    setBatchDeleteBookDraft(selectedBooks);
+  }
+
+  function startBookTableColumnResize(
+    event: ReactPointerEvent<HTMLSpanElement>,
+    column: BookTableResizableColumnKey,
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    const startX = event.clientX;
+    const startWidth = bookTableColumnWidths[column];
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      const nextWidth = clamp(
+        startWidth + moveEvent.clientX - startX,
+        bookTableColumnMinWidths[column],
+        bookTableColumnMaxWidths[column],
+      );
+      setBookTableColumnWidths((current) => ({ ...current, [column]: nextWidth }));
+    };
+    const onPointerUp = () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+    };
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp, { once: true });
   }
 
   function toggleNoteSelection(noteId: string) {
@@ -2290,6 +2556,11 @@ export default function App() {
     animateClose(setDeleteBookClosing, () => setDeleteBookDraft(null));
   }
 
+  function closeBatchDeleteBooksModal() {
+    if (!batchDeleteBookDraft) return;
+    animateClose(setBatchDeleteBookClosing, () => setBatchDeleteBookDraft(null));
+  }
+
   function closeSyncReportModal() {
     if (!syncReport) return;
     animateClose(setSyncReportClosing, () => setSyncReport(null));
@@ -2426,6 +2697,10 @@ export default function App() {
       closeBatchExportModal();
       return true;
     }
+    if (bookTableUploadOpen) {
+      setBookTableUploadOpen(false);
+      return true;
+    }
     if (importPreview) {
       closeImportModal();
       return true;
@@ -2448,6 +2723,10 @@ export default function App() {
     }
     if (syncReport) {
       closeSyncReportModal();
+      return true;
+    }
+    if (batchDeleteBookDraft) {
+      closeBatchDeleteBooksModal();
       return true;
     }
     if (deleteBookDraft) {
@@ -2601,6 +2880,34 @@ export default function App() {
     }
   }
 
+  const allTableBooksSelected =
+    sortedBooks.length > 0 && sortedBooks.every((book) => selectedBookIds.includes(book.id));
+
+  const renderBookTableHeaderCell = (
+    column: BookTableResizableColumnKey,
+    label: string,
+    sortKey?: BookTableSortKey,
+  ) => (
+    <div className={`book-table-cell book-table-header-cell ${sortKey ? "sortable" : ""}`}>
+      {sortKey ? (
+        <button type="button" onClick={() => toggleBookTableSort(sortKey)}>
+          <span>{label}</span>
+          <span className="book-table-sort-indicator" aria-hidden="true">
+            {bookTableSort.key === sortKey ? (bookTableSort.direction === "asc" ? "↑" : "↓") : "↕"}
+          </span>
+        </button>
+      ) : (
+        <span>{label}</span>
+      )}
+      <span
+        className="book-table-resizer"
+        role="separator"
+        aria-label={`调整${label}列宽`}
+        onPointerDown={(event) => startBookTableColumnResize(event, column)}
+      />
+    </div>
+  );
+
   const effectiveThemeSeries = getEffectiveThemeSeries(settings.themeSeries);
 
   if (!activeBook) {
@@ -2622,9 +2929,16 @@ export default function App() {
             <button
               className={`icon-button ${homeView === "grid" ? "active" : ""}`}
               title="画廊视图"
-              onClick={() => runViewTransition(() => setHomeView("grid"))}
+              onClick={() => setHomeLibraryView("grid")}
             >
               <Grid3X3 size={18} />
+            </button>
+            <button
+              className={`icon-button ${homeView === "table" ? "active" : ""}`}
+              title="表格视图"
+              onClick={() => setHomeLibraryView("table")}
+            >
+              <List size={18} />
             </button>
             <button
               className={`icon-button ${homeView === "notes" ? "active" : ""}`}
@@ -2675,6 +2989,159 @@ export default function App() {
             onExportSelected={() => void exportSelectedNotes()}
             onMarkStatus={(status) => void updateSelectedNoteStatus(status)}
           />
+        ) : homeView === "table" ? (
+          <main
+            ref={bookCollectionRef}
+            className={`book-collection table ${importDragActive ? "is-import-drag-active" : ""}`}
+          >
+            <div className="book-table-toolbar">
+              <div>
+                <strong>书籍表格</strong>
+                <small>
+                  {books.length} 本书
+                  {selectedBooks.length ? ` / 已选 ${selectedBooks.length} 本` : ""}
+                </small>
+              </div>
+              <div className="book-table-actions">
+                {selectedBooks.length > 0 && (
+                  <button
+                    type="button"
+                    className="book-table-action danger"
+                    onClick={openBatchDeleteBooksModal}
+                    disabled={busy}
+                  >
+                    <Trash2 size={15} /> 删除选中
+                  </button>
+                )}
+                <div className="book-table-upload" onPointerDown={(event) => event.stopPropagation()}>
+                  <button
+                    type="button"
+                    className="book-table-action primary"
+                    onClick={() => setBookTableUploadOpen((open) => !open)}
+                    disabled={busy}
+                  >
+                    <FolderPlus size={15} /> 上传
+                  </button>
+                  {bookTableUploadOpen && (
+                    <div className="book-table-upload-menu">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBookTableUploadOpen(false);
+                          void handleChooseMarkdownFiles();
+                        }}
+                      >
+                        <FileText size={15} /> Markdown 文件
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBookTableUploadOpen(false);
+                          void handleChooseFolder();
+                        }}
+                      >
+                        <FolderPlus size={15} /> 文件夹
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className={`book-table-drop-zone ${importDragActive ? "drag-active" : ""}`}>
+              <div className="book-table-scroll">
+                <div
+                  className="book-table"
+                  style={{ "--book-table-grid": bookTableGridTemplate } as CSSProperties}
+                >
+                  <div className="book-table-row book-table-head">
+                    <div className="book-table-cell book-table-check-cell">
+                      <input
+                        type="checkbox"
+                        checked={allTableBooksSelected}
+                        disabled={sortedBooks.length === 0}
+                        aria-label="选择全部书籍"
+                        onChange={toggleAllTableBooks}
+                      />
+                    </div>
+                    {homeTableColumns.rowNumber &&
+                      renderBookTableHeaderCell("rowNumber", "行号")}
+                    {renderBookTableHeaderCell("name", "标题", "name")}
+                    {homeTableColumns.chapterCount &&
+                      renderBookTableHeaderCell("chapterCount", "章节数量", "chapterCount")}
+                    {homeTableColumns.annotationCount &&
+                      renderBookTableHeaderCell("annotationCount", "批注数量", "annotationCount")}
+                    {homeTableColumns.createdAt &&
+                      renderBookTableHeaderCell("createdAt", "上传时间", "createdAt")}
+                    {homeTableColumns.lastOpenedAt &&
+                      renderBookTableHeaderCell("lastOpenedAt", "打开时间", "lastOpenedAt")}
+                  </div>
+                  {sortedBooks.map((book, index) => {
+                    const selected = selectedBookIds.includes(book.id);
+                    return (
+                      <div
+                        key={book.id}
+                        className={`book-table-row book-table-body-row ${
+                          selected ? "selected" : ""
+                        } ${book.isPinned ? "is-pinned" : ""}`}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => void openBook(book)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            void openBook(book);
+                          }
+                        }}
+                        onContextMenu={(event) => handleBookContextMenu(event, book)}
+                      >
+                        <div
+                          className="book-table-cell book-table-check-cell"
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            aria-label={`选择《${book.name}》`}
+                            onChange={() => toggleBookSelection(book.id)}
+                          />
+                        </div>
+                        {homeTableColumns.rowNumber && (
+                          <div className="book-table-cell book-table-index-cell">
+                            {index + 1}
+                          </div>
+                        )}
+                        <div className="book-table-cell book-table-title-cell">
+                          <strong>{book.name}</strong>
+                          <small>{book.rootPath}</small>
+                        </div>
+                        {homeTableColumns.chapterCount && (
+                          <div className="book-table-cell number">{book.chapterCount}</div>
+                        )}
+                        {homeTableColumns.annotationCount && (
+                          <div className="book-table-cell number">{book.annotationCount}</div>
+                        )}
+                        {homeTableColumns.createdAt && (
+                          <div className="book-table-cell date">{formatBookDate(book.createdAt)}</div>
+                        )}
+                        {homeTableColumns.lastOpenedAt && (
+                          <div className="book-table-cell date">
+                            {formatBookDate(book.lastOpenedAt)}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {sortedBooks.length === 0 && (
+                    <div className="book-table-empty">
+                      <FolderPlus size={22} />
+                      <strong>还没有书籍</strong>
+                      <span>点击上传，或把 Markdown 文件/文件夹拖到这里。</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </main>
         ) : (
           <main
             ref={bookCollectionRef}
@@ -2762,6 +3229,15 @@ export default function App() {
             busy={busy}
             onClose={closeDeleteBookModal}
             onConfirm={() => void confirmDeleteBook()}
+          />
+        )}
+        {batchDeleteBookDraft && (
+          <DeleteBooksModal
+            closing={batchDeleteBookClosing}
+            books={batchDeleteBookDraft}
+            busy={busy}
+            onClose={closeBatchDeleteBooksModal}
+            onConfirm={() => void confirmBatchDeleteBooks()}
           />
         )}
         {syncReport && (
