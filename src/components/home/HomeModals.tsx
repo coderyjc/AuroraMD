@@ -1395,7 +1395,7 @@ export function HomeSettingsModal({
                   <div className="about-release-card">
                     <div>
                       <span>当前版本</span>
-                      <strong>v0.5.1</strong>
+                      <strong>v0.5.2</strong>
                     </div>
                     <ul>
                       <li>Markdown 阅读器支持 Mermaid 图表、代码语法高亮和相对路径本地图片。</li>
