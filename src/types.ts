@@ -153,6 +153,7 @@ export interface AppSettings {
   slideAnnotate: boolean;
   homeDefaultView: HomeLibraryView;
   homeTableColumns: string;
+  homePageSize: number;
   shortcutBindings: string;
 }
 

@@ -1802,6 +1802,27 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
     } else {
         Ok(())
     };
+    let home_page_size_restore_result = if restore_result.is_ok()
+        && backup_has_column(&conn, "settings", "home_page_size")?
+    {
+        conn.execute_batch(
+            r#"
+            UPDATE settings
+            SET home_page_size = (
+                SELECT home_page_size
+                FROM backup.settings
+                WHERE backup.settings.id = settings.id
+            )
+            WHERE EXISTS (
+                SELECT 1
+                FROM backup.settings
+                WHERE backup.settings.id = settings.id
+            );
+            "#,
+        )
+    } else {
+        Ok(())
+    };
     let split_font_restore_result = if restore_result.is_ok()
         && backup_has_column(&conn, "settings", "interface_latin_font_family")?
         && backup_has_column(&conn, "settings", "interface_cjk_font_family")?
@@ -1996,6 +2017,8 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
         .map_err(|error| format!("Failed to restore theme series setting: {error}"))?;
     home_view_restore_result
         .map_err(|error| format!("Failed to restore home view settings: {error}"))?;
+    home_page_size_restore_result
+        .map_err(|error| format!("Failed to restore home page size setting: {error}"))?;
     split_font_restore_result
         .map_err(|error| format!("Failed to restore font settings: {error}"))?;
     pinned_restore_result.map_err(|error| format!("Failed to restore pinned books: {error}"))?;
@@ -2076,7 +2099,8 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
             slide_annotate = ?18,
             home_default_view = ?19,
             home_table_columns = ?20,
-            shortcut_bindings = ?21
+            home_page_size = ?21,
+            shortcut_bindings = ?22
         WHERE id = 1
         "#,
         params![
@@ -2106,6 +2130,7 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
             patch
                 .home_table_columns
                 .unwrap_or(current.home_table_columns),
+            patch.home_page_size.unwrap_or(current.home_page_size),
             patch.shortcut_bindings.unwrap_or(current.shortcut_bindings)
         ],
     )
@@ -3014,6 +3039,7 @@ fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
             slide_annotate,
             home_default_view,
             home_table_columns,
+            home_page_size,
             shortcut_bindings
         FROM settings
         WHERE id = 1
@@ -3041,7 +3067,8 @@ fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
                 slide_annotate: row.get(17)?,
                 home_default_view: row.get(18)?,
                 home_table_columns: row.get(19)?,
-                shortcut_bindings: row.get(20)?,
+                home_page_size: row.get(20)?,
+                shortcut_bindings: row.get(21)?,
             })
         },
     )

@@ -102,6 +102,7 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
             slide_annotate INTEGER NOT NULL DEFAULT 0,
             home_default_view TEXT NOT NULL DEFAULT 'grid',
             home_table_columns TEXT NOT NULL DEFAULT '{"rowNumber":true,"chapterCount":true,"annotationCount":true,"createdAt":true,"lastOpenedAt":true}',
+            home_page_size INTEGER NOT NULL DEFAULT 20,
             shortcut_bindings TEXT NOT NULL
         );
 
@@ -200,6 +201,12 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
         "settings",
         "home_table_columns",
         "ALTER TABLE settings ADD COLUMN home_table_columns TEXT NOT NULL DEFAULT '{\"rowNumber\":true,\"chapterCount\":true,\"annotationCount\":true,\"createdAt\":true,\"lastOpenedAt\":true}'",
+    )?;
+    ensure_column(
+        &conn,
+        "settings",
+        "home_page_size",
+        "ALTER TABLE settings ADD COLUMN home_page_size INTEGER NOT NULL DEFAULT 20",
     )?;
     ensure_column(
         &conn,
@@ -313,8 +320,9 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
             slide_annotate,
             home_default_view,
             home_table_columns,
+            home_page_size,
             shortcut_bindings
-        ) VALUES (1, 100, 'classic', 'paper', 'Literata, Georgia, serif', '"IBM Plex Sans", "Segoe UI", "Microsoft YaHei", sans-serif', '"IBM Plex Sans", "Segoe UI", sans-serif', '"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif', 'Literata, Georgia, serif', 'Literata, Georgia, serif', '"Noto Serif SC", "Songti SC", SimSun, serif', 18, 1.72, 820, 52, 18, 'warm', 'hairline', 0, 0, 'grid', '{"rowNumber":true,"chapterCount":true,"annotationCount":true,"createdAt":true,"lastOpenedAt":true}', '{"search":"Ctrl+K","nextChapter":"N","previousChapter":"P","highlight":"H","export":"E","toggleLeft":"[","toggleRight":"]"}')
+        ) VALUES (1, 100, 'classic', 'paper', 'Literata, Georgia, serif', '"IBM Plex Sans", "Segoe UI", "Microsoft YaHei", sans-serif', '"IBM Plex Sans", "Segoe UI", sans-serif', '"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif', 'Literata, Georgia, serif', 'Literata, Georgia, serif', '"Noto Serif SC", "Songti SC", SimSun, serif', 18, 1.72, 820, 52, 18, 'warm', 'hairline', 0, 0, 'grid', '{"rowNumber":true,"chapterCount":true,"annotationCount":true,"createdAt":true,"lastOpenedAt":true}', 20, '{"search":"Ctrl+K","nextChapter":"N","previousChapter":"P","highlight":"H","export":"E","toggleLeft":"[","toggleRight":"]"}')
         "#,
         [],
     )?;

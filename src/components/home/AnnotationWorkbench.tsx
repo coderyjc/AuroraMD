@@ -1,4 +1,5 @@
 import { Archive, Check, Download, Filter, MessageSquare } from "lucide-react";
+import type { ReactNode } from "react";
 import type { AnnotationStatus, BookSummary, Chapter, NoteItem } from "../../types";
 import { annotationStatusLabel } from "../../utils/annotations";
 import { chapterFileName } from "../../utils/chapters";
@@ -8,6 +9,7 @@ export type NoteFilterStatus = "all" | AnnotationStatus;
 interface AnnotationWorkbenchProps {
   books: BookSummary[];
   notes: NoteItem[];
+  resultCount: number;
   allNotesCount: number;
   chapters: Chapter[];
   bookId: string;
@@ -26,11 +28,13 @@ interface AnnotationWorkbenchProps {
   onOpenNote: (note: NoteItem) => void;
   onExportSelected: () => void;
   onMarkStatus: (status: AnnotationStatus) => void;
+  pagination?: ReactNode;
 }
 
 export function AnnotationWorkbench({
   books,
   notes,
+  resultCount,
   allNotesCount,
   chapters,
   bookId,
@@ -49,8 +53,9 @@ export function AnnotationWorkbench({
   onOpenNote,
   onExportSelected,
   onMarkStatus,
+  pagination,
 }: AnnotationWorkbenchProps) {
-  const allSelected = notes.length > 0 && selectedIds.length === notes.length;
+  const allSelected = notes.length > 0 && notes.every((note) => selectedIds.includes(note.id));
 
   return (
     <main className="notes-board workbench">
@@ -60,7 +65,7 @@ export function AnnotationWorkbench({
           <h2>批注工作台</h2>
         </div>
         <span>
-          {notes.length} / {allNotesCount} 条
+          {resultCount} / {allNotesCount} 条
         </span>
       </div>
 
@@ -114,7 +119,7 @@ export function AnnotationWorkbench({
       <section className="workbench-actions">
         <button onClick={onToggleAll} disabled={notes.length === 0}>
           {allSelected ? <Check size={16} /> : <Filter size={16} />}
-          {allSelected ? "取消全选" : "选择当前结果"}
+          {allSelected ? "取消当前页" : "选择当前页"}
         </button>
         <button onClick={onExportSelected} disabled={busy || selectedCount === 0}>
           <Download size={16} />
@@ -158,6 +163,7 @@ export function AnnotationWorkbench({
           ))}
         </div>
       )}
+      {pagination}
     </main>
   );
 }

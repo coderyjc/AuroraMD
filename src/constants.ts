@@ -673,6 +673,8 @@ export const defaultHomeTableColumns: Record<HomeTableColumnKey, boolean> = {
   lastOpenedAt: true,
 };
 
+export const homePageSizeOptions = [10, 20, 30, 40] as const;
+
 export const defaultSettings: AppSettings = {
   annotationContextChars: 100,
   themeSeries: "classic",
@@ -694,5 +696,6 @@ export const defaultSettings: AppSettings = {
   slideAnnotate: false,
   homeDefaultView: "grid",
   homeTableColumns: JSON.stringify(defaultHomeTableColumns),
+  homePageSize: 20,
   shortcutBindings: JSON.stringify(defaultShortcutBindings),
 };

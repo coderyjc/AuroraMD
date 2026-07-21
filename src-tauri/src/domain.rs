@@ -234,6 +234,7 @@ pub struct AppSettings {
     pub slide_annotate: bool,
     pub home_default_view: String,
     pub home_table_columns: String,
+    pub home_page_size: i64,
     pub shortcut_bindings: String,
 }
 
@@ -282,6 +283,7 @@ pub struct SettingsPatch {
     pub slide_annotate: Option<bool>,
     pub home_default_view: Option<String>,
     pub home_table_columns: Option<String>,
+    pub home_page_size: Option<i64>,
     pub shortcut_bindings: Option<String>,
 }
 

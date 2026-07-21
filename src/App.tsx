@@ -111,6 +111,7 @@ import {
   getDefaultThemeForSeries,
   getEffectiveThemeSeries,
   highlightColors,
+  homePageSizeOptions,
 } from "./constants";
 import {
   applyDomHighlights,
@@ -199,6 +200,16 @@ type BookTableResizableColumnKey = HomeTableColumnKey | "name";
 interface BookTableSortState {
   key: BookTableSortKey;
   direction: SortDirection;
+}
+
+interface PaginationState {
+  pageIndex: number;
+  pageCount: number;
+  pageSize: number;
+  total: number;
+  startIndex: number;
+  endIndex: number;
+  visible: boolean;
 }
 
 const defaultBookTableSort: BookTableSortState = { key: "lastOpenedAt", direction: "desc" };
@@ -333,6 +344,46 @@ function normalizeHomeLibraryView(value: string): HomeLibraryView {
   return value === "table" ? "table" : "grid";
 }
 
+function normalizeHomePageSize(value: number) {
+  return homePageSizeOptions.includes(value as (typeof homePageSizeOptions)[number])
+    ? value
+    : defaultSettings.homePageSize;
+}
+
+function buildPaginationState(total: number, requestedPageIndex: number, pageSize: number): PaginationState {
+  const normalizedPageSize = normalizeHomePageSize(pageSize);
+  const pageCount = Math.max(1, Math.ceil(total / normalizedPageSize));
+  const pageIndex = clamp(requestedPageIndex, 0, pageCount - 1);
+  const startIndex = pageIndex * normalizedPageSize;
+  const endIndex = Math.min(total, startIndex + normalizedPageSize);
+  return {
+    pageIndex,
+    pageCount,
+    pageSize: normalizedPageSize,
+    total,
+    startIndex,
+    endIndex,
+    visible: total > normalizedPageSize,
+  };
+}
+
+function getVisiblePaginationItems(pageIndex: number, pageCount: number) {
+  if (pageCount <= 7) {
+    return Array.from({ length: pageCount }, (_, index) => index);
+  }
+
+  const items: Array<number | "ellipsis"> = [0];
+  const start = Math.max(1, pageIndex - 1);
+  const end = Math.min(pageCount - 2, pageIndex + 1);
+  if (start > 1) items.push("ellipsis");
+  for (let index = start; index <= end; index += 1) {
+    items.push(index);
+  }
+  if (end < pageCount - 2) items.push("ellipsis");
+  items.push(pageCount - 1);
+  return items;
+}
+
 function parseHomeTableColumns(value: string): Record<HomeTableColumnKey, boolean> {
   try {
     const parsed = JSON.parse(value) as Partial<Record<HomeTableColumnKey, unknown>>;
@@ -411,6 +462,8 @@ export default function App() {
   const [batchDeleteBookDraft, setBatchDeleteBookDraft] = useState<BookSummary[] | null>(null);
   const [batchDeleteBookClosing, setBatchDeleteBookClosing] = useState(false);
   const [selectedBookIds, setSelectedBookIds] = useState<string[]>([]);
+  const [libraryPage, setLibraryPage] = useState(0);
+  const [notesPage, setNotesPage] = useState(0);
   const [bookTableSort, setBookTableSort] = useState<BookTableSortState>(defaultBookTableSort);
   const [bookTableColumnWidths, setBookTableColumnWidths] = useState(defaultBookTableColumnWidths);
   const [bookTableUploadOpen, setBookTableUploadOpen] = useState(false);
@@ -505,6 +558,11 @@ export default function App() {
     const existingBookIds = new Set(books.map((book) => book.id));
     setSelectedBookIds((current) => current.filter((bookId) => existingBookIds.has(bookId)));
   }, [books]);
+
+  useEffect(() => {
+    const existingNoteIds = new Set(notes.map((note) => note.id));
+    setSelectedNoteIds((current) => current.filter((noteId) => existingNoteIds.has(noteId)));
+  }, [notes]);
 
   useEffect(() => {
     if (!bookTableUploadOpen) return;
@@ -1101,6 +1159,7 @@ export default function App() {
     () => parseShortcutBindings(settings.shortcutBindings),
     [settings.shortcutBindings],
   );
+  const homePageSize = normalizeHomePageSize(settings.homePageSize);
 
   const filteredNotes = useMemo(() => {
     return notes.filter((note) => {
@@ -1115,6 +1174,14 @@ export default function App() {
   const selectedNotes = useMemo(
     () => filteredNotes.filter((note) => selectedNoteIds.includes(note.id)),
     [filteredNotes, selectedNoteIds],
+  );
+  const notesPagination = useMemo(
+    () => buildPaginationState(filteredNotes.length, notesPage, homePageSize),
+    [filteredNotes.length, homePageSize, notesPage],
+  );
+  const pagedNotes = useMemo(
+    () => filteredNotes.slice(notesPagination.startIndex, notesPagination.endIndex),
+    [filteredNotes, notesPagination.endIndex, notesPagination.startIndex],
   );
 
   const homeTableColumns = useMemo(
@@ -1131,6 +1198,22 @@ export default function App() {
       return left.name.localeCompare(right.name, "zh-CN", { numeric: true, sensitivity: "base" });
     });
   }, [bookTableSort, books]);
+  const gridPagination = useMemo(
+    () => buildPaginationState(books.length, libraryPage, homePageSize),
+    [books.length, homePageSize, libraryPage],
+  );
+  const pagedGridBooks = useMemo(
+    () => books.slice(gridPagination.startIndex, gridPagination.endIndex),
+    [books, gridPagination.endIndex, gridPagination.startIndex],
+  );
+  const tablePagination = useMemo(
+    () => buildPaginationState(sortedBooks.length, libraryPage, homePageSize),
+    [homePageSize, libraryPage, sortedBooks.length],
+  );
+  const pagedTableBooks = useMemo(
+    () => sortedBooks.slice(tablePagination.startIndex, tablePagination.endIndex),
+    [sortedBooks, tablePagination.endIndex, tablePagination.startIndex],
+  );
 
   const selectedBooks = useMemo(
     () => books.filter((book) => selectedBookIds.includes(book.id)),
@@ -1147,6 +1230,23 @@ export default function App() {
     if (homeTableColumns.lastOpenedAt) columns.push(`${bookTableColumnWidths.lastOpenedAt}px`);
     return columns.join(" ");
   }, [bookTableColumnWidths, homeTableColumns]);
+
+  useEffect(() => {
+    if (libraryPage !== gridPagination.pageIndex) {
+      setLibraryPage(gridPagination.pageIndex);
+    }
+  }, [gridPagination.pageIndex, libraryPage]);
+
+  useEffect(() => {
+    if (notesPage !== notesPagination.pageIndex) {
+      setNotesPage(notesPagination.pageIndex);
+    }
+  }, [notesPage, notesPagination.pageIndex]);
+
+  useEffect(() => {
+    setLibraryPage(0);
+    setNotesPage(0);
+  }, [homePageSize]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -2386,6 +2486,7 @@ export default function App() {
   }
 
   function toggleBookTableSort(key: BookTableSortKey) {
+    setLibraryPage(0);
     setBookTableSort((current) =>
       current.key === key
         ? { key, direction: current.direction === "asc" ? "desc" : "asc" }
@@ -2400,10 +2501,14 @@ export default function App() {
   }
 
   function toggleAllTableBooks() {
-    const tableBookIds = sortedBooks.map((book) => book.id);
+    const tableBookIds = pagedTableBooks.map((book) => book.id);
     const allSelected =
       tableBookIds.length > 0 && tableBookIds.every((bookId) => selectedBookIds.includes(bookId));
-    setSelectedBookIds(allSelected ? [] : tableBookIds);
+    setSelectedBookIds((current) =>
+      allSelected
+        ? current.filter((bookId) => !tableBookIds.includes(bookId))
+        : Array.from(new Set([...current, ...tableBookIds])),
+    );
   }
 
   function openBatchDeleteBooksModal() {
@@ -2443,11 +2548,14 @@ export default function App() {
   }
 
   function toggleAllFilteredNotes() {
-    if (selectedNoteIds.length === filteredNotes.length) {
-      setSelectedNoteIds([]);
-    } else {
-      setSelectedNoteIds(filteredNotes.map((note) => note.id));
-    }
+    const pageNoteIds = pagedNotes.map((note) => note.id);
+    const allSelected =
+      pageNoteIds.length > 0 && pageNoteIds.every((noteId) => selectedNoteIds.includes(noteId));
+    setSelectedNoteIds((current) =>
+      allSelected
+        ? current.filter((noteId) => !pageNoteIds.includes(noteId))
+        : Array.from(new Set([...current, ...pageNoteIds])),
+    );
   }
 
   async function updateSelectedNoteStatus(status: AnnotationStatus) {
@@ -3006,7 +3114,7 @@ export default function App() {
   }
 
   const allTableBooksSelected =
-    sortedBooks.length > 0 && sortedBooks.every((book) => selectedBookIds.includes(book.id));
+    pagedTableBooks.length > 0 && pagedTableBooks.every((book) => selectedBookIds.includes(book.id));
 
   const renderBookTableHeaderCell = (
     column: BookTableResizableColumnKey,
@@ -3032,6 +3140,57 @@ export default function App() {
       />
     </div>
   );
+
+  const renderHomePagination = (
+    pagination: PaginationState,
+    onPageChange: (pageIndex: number) => void,
+    label: string,
+  ) => {
+    if (!pagination.visible) return null;
+    const pageItems = getVisiblePaginationItems(pagination.pageIndex, pagination.pageCount);
+    return (
+      <nav className="home-pagination" aria-label={`${label}分页`}>
+        <span className="home-pagination-summary">
+          {pagination.startIndex + 1}-{pagination.endIndex} / {pagination.total}
+        </span>
+        <button
+          type="button"
+          className="home-pagination-nav"
+          onClick={() => onPageChange(Math.max(0, pagination.pageIndex - 1))}
+          disabled={pagination.pageIndex === 0}
+          aria-label="上一页"
+        >
+          <ChevronLeft size={15} />
+        </button>
+        <div className="home-pagination-pages">
+          {pageItems.map((item, index) =>
+            item === "ellipsis" ? (
+              <span key={`ellipsis-${index}`}>...</span>
+            ) : (
+              <button
+                key={item}
+                type="button"
+                className={item === pagination.pageIndex ? "active" : ""}
+                onClick={() => onPageChange(item)}
+                aria-current={item === pagination.pageIndex ? "page" : undefined}
+              >
+                {item + 1}
+              </button>
+            ),
+          )}
+        </div>
+        <button
+          type="button"
+          className="home-pagination-nav"
+          onClick={() => onPageChange(Math.min(pagination.pageCount - 1, pagination.pageIndex + 1))}
+          disabled={pagination.pageIndex >= pagination.pageCount - 1}
+          aria-label="下一页"
+        >
+          <ChevronRight size={15} />
+        </button>
+      </nav>
+    );
+  };
 
   const effectiveThemeSeries = getEffectiveThemeSeries(settings.themeSeries);
 
@@ -3085,7 +3244,8 @@ export default function App() {
         {homeView === "notes" ? (
           <AnnotationWorkbench
             books={books}
-            notes={filteredNotes}
+            notes={pagedNotes}
+            resultCount={filteredNotes.length}
             allNotesCount={notes.length}
             chapters={workbenchChapters}
             bookId={workbenchBookId}
@@ -3098,22 +3258,30 @@ export default function App() {
             onBookChange={(bookId) => {
               setWorkbenchBookId(bookId);
               setWorkbenchChapterId("all");
+              setNotesPage(0);
               setSelectedNoteIds([]);
             }}
             onChapterChange={(chapterId) => {
               setWorkbenchChapterId(chapterId);
+              setNotesPage(0);
               setSelectedNoteIds([]);
             }}
             onStatusChange={(status) => {
               setWorkbenchStatus(status);
+              setNotesPage(0);
               setSelectedNoteIds([]);
             }}
-            onCommentOnlyChange={setCommentOnly}
+            onCommentOnlyChange={(enabled) => {
+              setCommentOnly(enabled);
+              setNotesPage(0);
+              setSelectedNoteIds([]);
+            }}
             onToggleNote={toggleNoteSelection}
             onToggleAll={toggleAllFilteredNotes}
             onOpenNote={openWorkbenchNoteDetail}
             onExportSelected={() => void exportSelectedNotes()}
             onMarkStatus={(status) => void updateSelectedNoteStatus(status)}
+            pagination={renderHomePagination(notesPagination, setNotesPage, "批注")}
           />
         ) : homeView === "table" ? (
           <main
@@ -3184,8 +3352,8 @@ export default function App() {
                       <input
                         type="checkbox"
                         checked={allTableBooksSelected}
-                        disabled={sortedBooks.length === 0}
-                        aria-label="选择全部书籍"
+                        disabled={pagedTableBooks.length === 0}
+                        aria-label="选择当前页书籍"
                         onChange={toggleAllTableBooks}
                       />
                     </div>
@@ -3201,7 +3369,7 @@ export default function App() {
                     {homeTableColumns.lastOpenedAt &&
                       renderBookTableHeaderCell("lastOpenedAt", "打开时间", "lastOpenedAt")}
                   </div>
-                  {sortedBooks.map((book, index) => {
+                  {pagedTableBooks.map((book, index) => {
                     const selected = selectedBookIds.includes(book.id);
                     return (
                       <div
@@ -3233,7 +3401,7 @@ export default function App() {
                         </div>
                         {homeTableColumns.rowNumber && (
                           <div className="book-table-cell book-table-index-cell">
-                            {index + 1}
+                            {tablePagination.startIndex + index + 1}
                           </div>
                         )}
                         <div className="book-table-cell book-table-title-cell">
@@ -3267,13 +3435,14 @@ export default function App() {
                 </div>
               </div>
             </div>
+            {renderHomePagination(tablePagination, setLibraryPage, "书籍表格")}
           </main>
         ) : (
           <main
             ref={bookCollectionRef}
             className={`book-collection ${homeView} ${importDragActive ? "is-import-drag-active" : ""}`}
           >
-            {books.map((book) => (
+            {pagedGridBooks.map((book) => (
               <button
                 key={book.id}
                 className={`book-card book-entry ${book.isPinned ? "is-pinned" : ""}`}
@@ -3298,6 +3467,7 @@ export default function App() {
               <span>拖入文件夹 / 点击选择</span>
               <small>作为画廊末尾的新书籍入口</small>
             </button>
+            {renderHomePagination(gridPagination, setLibraryPage, "书籍画廊")}
           </main>
         )}
 

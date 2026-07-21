@@ -1,4 +1,4 @@
-import { AlertTriangle, Archive, ArrowRight, BookOpen, Check, ChevronLeft, ChevronRight, Copy, Database, Download, FileText, FolderOpen, Github, GripVertical, Keyboard, MessageSquare, Palette, Pencil, Pin, PinOff, Plus, RefreshCw, Save, Search, Trash2, Type, Upload, X } from "lucide-react";
+import { AlertTriangle, Archive, ArrowRight, BookOpen, Check, ChevronLeft, ChevronRight, Copy, Database, Download, FileText, FolderOpen, Github, GripVertical, Keyboard, List, MessageSquare, Palette, Pencil, Pin, PinOff, Plus, RefreshCw, Save, Search, Trash2, Type, Upload, X } from "lucide-react";
 import { type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   deleteChapter,
@@ -20,6 +20,7 @@ import {
   getDefaultThemeForSeries,
   getThemesForSeries,
   homeTableColumnOptions,
+  homePageSizeOptions,
   themeOptions as allThemeOptions,
   visibleThemeSeriesOptions,
 } from "../../constants";
@@ -1009,6 +1010,25 @@ export function HomeSettingsModal({
                       <strong>列表</strong>
                       <small>默认以可排序表格展示书籍。</small>
                     </button>
+                  </div>
+                </section>
+
+                <section className="settings-section">
+                  <h3>
+                    <List size={16} /> 首页分页
+                  </h3>
+                  <div className="page-size-choice-grid">
+                    {homePageSizeOptions.map((pageSize) => (
+                      <button
+                        key={pageSize}
+                        type="button"
+                        className={settings.homePageSize === pageSize ? "active" : ""}
+                        onClick={() => onChange({ homePageSize: pageSize })}
+                      >
+                        <strong>{pageSize}</strong>
+                        <small>每页项目</small>
+                      </button>
+                    ))}
                   </div>
                 </section>
 
