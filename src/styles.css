@@ -4235,8 +4235,9 @@ button:disabled {
 
 .chapter-row:hover,
 .chapter-row.active,
-.outline-list button:hover {
-  background: rgba(195, 69, 43, 0.1);
+.outline-list button:hover,
+.outline-list button.active {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .chapter-row.active {
@@ -4263,6 +4264,12 @@ button:disabled {
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.outline-list button.active {
+  color: var(--accent);
+  font-weight: 820;
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .reader-main {
@@ -7657,6 +7664,11 @@ body.version-sidebar-resize-active * {
 .surface-ink .annotation-card blockquote,
 .surface-ink .draft-panel blockquote {
   color: var(--muted);
+}
+
+.surface-ink .chapter-row.active,
+.surface-ink .outline-list button.active {
+  color: var(--accent);
 }
 
 .surface-ink .annotation-card,

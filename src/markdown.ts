@@ -21,7 +21,7 @@ import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
 import MarkdownIt from "markdown-it";
-import type { Annotation } from "./types";
+import type { Annotation, OutlineItem } from "./types";
 
 export interface SearchHighlight {
   id?: string;
@@ -106,6 +106,7 @@ function registerHighlightLanguages() {
 
 const defaultImageRule = md.renderer.rules.image;
 const defaultFenceRule = md.renderer.rules.fence;
+const defaultHeadingOpenRule = md.renderer.rules.heading_open;
 
 md.renderer.rules.image = (tokens, idx, options, env, self) => {
   const token = tokens[idx];
@@ -133,11 +134,30 @@ md.renderer.rules.fence = (tokens, idx, options, env, self) => {
     : self.renderToken(tokens, idx, options);
 };
 
+md.renderer.rules.heading_open = (tokens, idx, options, env, self) => {
+  const token = tokens[idx];
+  const outlineItems = Array.isArray(env.outlineItems)
+    ? (env.outlineItems as OutlineItem[])
+    : [];
+  const headingIndex =
+    typeof env.outlineHeadingIndex === "number" ? (env.outlineHeadingIndex as number) : 0;
+  env.outlineHeadingIndex = headingIndex + 1;
+  const outlineItem = outlineItems[headingIndex];
+  if (outlineItem) {
+    token.attrSet("data-outline-id", outlineItem.id);
+    token.attrSet("id", `outline-${outlineItem.id}`);
+  }
+  return defaultHeadingOpenRule
+    ? defaultHeadingOpenRule(tokens, idx, options, env, self)
+    : self.renderToken(tokens, idx, options);
+};
+
 export function renderMarkdownWithAnnotations(
   content: string,
   chapterFilePath: string,
+  outlineItems: OutlineItem[] = [],
 ) {
-  return md.render(content, { chapterFilePath });
+  return md.render(content, { chapterFilePath, outlineItems, outlineHeadingIndex: 0 });
 }
 
 export function renderMarkdownToReadableText(content: string, chapterFilePath: string) {

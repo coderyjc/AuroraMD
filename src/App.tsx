@@ -479,6 +479,12 @@ export default function App() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [contextMenuClosing, setContextMenuClosing] = useState(false);
   const selectionMenuCloseTokenRef = useRef(0);
+  const suppressNextSelectionMouseUpRef = useRef(false);
+  const selectionDismissPointerRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+  } | null>(null);
   const [annotationMenu, setAnnotationMenu] = useState<AnnotationMenuState | null>(null);
   const [annotationMenuClosing, setAnnotationMenuClosing] = useState(false);
   const [chapterMenu, setChapterMenu] = useState<ChapterMenuState | null>(null);
@@ -537,9 +543,11 @@ export default function App() {
   const [changeHighlightBusy, setChangeHighlightBusy] = useState(false);
   const [changeHighlightBase, setChangeHighlightBase] = useState<ChangeHighlightBase | null>(null);
   const [changeHighlights, setChangeHighlights] = useState<ChangeHighlight[]>([]);
+  const [activeOutlineId, setActiveOutlineId] = useState<string | null>(null);
 
   const articleRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const outlineListRef = useRef<HTMLDivElement | null>(null);
   const readerLeftRef = useRef<HTMLElement | null>(null);
   const readerRightRef = useRef<HTMLElement | null>(null);
   const readerSearchInputRef = useRef<HTMLInputElement | null>(null);
@@ -808,12 +816,49 @@ export default function App() {
 
   useEffect(() => {
     if (!contextMenu) return;
-    const close = () => closeSelectionContextMenu();
-    window.addEventListener("pointerdown", close);
-    window.addEventListener("scroll", close, true);
+    const closeFromPointer = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest(".selection-menu")) return;
+      suppressNextSelectionMouseUpRef.current = true;
+      selectionDismissPointerRef.current = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+      };
+      closeSelectionContextMenu({ clearPendingDraft: true });
+    };
+    const allowNewSelectionAfterDrag = (event: PointerEvent) => {
+      const dismissPointer = selectionDismissPointerRef.current;
+      if (!dismissPointer || dismissPointer.pointerId !== event.pointerId) return;
+      const distance = Math.hypot(
+        event.clientX - dismissPointer.startX,
+        event.clientY - dismissPointer.startY,
+      );
+      if (distance > 6) {
+        suppressNextSelectionMouseUpRef.current = false;
+      }
+    };
+    const releaseDismissPointer = (event: PointerEvent) => {
+      const dismissPointer = selectionDismissPointerRef.current;
+      if (dismissPointer && dismissPointer.pointerId === event.pointerId) {
+        selectionDismissPointerRef.current = null;
+        window.setTimeout(() => {
+          suppressNextSelectionMouseUpRef.current = false;
+        }, 0);
+      }
+    };
+    const closeFromScroll = () => closeSelectionContextMenu();
+    window.addEventListener("pointerdown", closeFromPointer);
+    window.addEventListener("pointermove", allowNewSelectionAfterDrag);
+    window.addEventListener("pointerup", releaseDismissPointer);
+    window.addEventListener("pointercancel", releaseDismissPointer);
+    window.addEventListener("scroll", closeFromScroll, true);
     return () => {
-      window.removeEventListener("pointerdown", close);
-      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("pointerdown", closeFromPointer);
+      window.removeEventListener("pointermove", allowNewSelectionAfterDrag);
+      window.removeEventListener("pointerup", releaseDismissPointer);
+      window.removeEventListener("pointercancel", releaseDismissPointer);
+      window.removeEventListener("scroll", closeFromScroll, true);
     };
   }, [contextMenu]);
 
@@ -894,8 +939,65 @@ export default function App() {
 
   const renderedHtml = useMemo(() => {
     if (!reader) return "";
-    return renderMarkdownWithAnnotations(reader.content, reader.chapter.filePath);
-  }, [reader?.chapter.filePath, reader?.content]);
+    return renderMarkdownWithAnnotations(reader.content, reader.chapter.filePath, reader.outline);
+  }, [reader?.chapter.filePath, reader?.content, reader?.outline]);
+
+  useEffect(() => {
+    if (!reader || !scrollRef.current || !articleRef.current) {
+      setActiveOutlineId(null);
+      return;
+    }
+
+    const surface = scrollRef.current;
+    let frame = 0;
+
+    const updateActiveOutline = () => {
+      frame = 0;
+      const headings = syncReaderOutlineHeadings();
+      if (!headings.length || !scrollRef.current) {
+        setActiveOutlineId(null);
+        return;
+      }
+
+      const surfaceRect = scrollRef.current.getBoundingClientRect();
+      const activationY = surfaceRect.top + Math.min(160, Math.max(72, scrollRef.current.clientHeight * 0.24));
+      let nextOutlineId = headings[0].dataset.outlineId ?? null;
+
+      for (const heading of headings) {
+        const outlineId = heading.dataset.outlineId;
+        if (!outlineId) continue;
+        if (heading.getBoundingClientRect().top <= activationY) {
+          nextOutlineId = outlineId;
+        } else {
+          break;
+        }
+      }
+
+      setActiveOutlineId((current) => (current === nextOutlineId ? current : nextOutlineId));
+    };
+
+    const scheduleUpdate = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(updateActiveOutline);
+    };
+
+    scheduleUpdate();
+    surface.addEventListener("scroll", scheduleUpdate, { passive: true });
+    window.addEventListener("resize", scheduleUpdate);
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      surface.removeEventListener("scroll", scheduleUpdate);
+      window.removeEventListener("resize", scheduleUpdate);
+    };
+  }, [reader?.outline, reader?.version.id, renderedHtml]);
+
+  useEffect(() => {
+    if (!activeOutlineId || !outlineListRef.current) return;
+    const activeButton = Array.from(
+      outlineListRef.current.querySelectorAll<HTMLButtonElement>("button[data-outline-id]"),
+    ).find((button) => button.dataset.outlineId === activeOutlineId);
+    activeButton?.scrollIntoView({ block: "nearest" });
+  }, [activeOutlineId]);
 
   const markdownEnhancementKey = useMemo(() => {
     if (!reader) return "";
@@ -1868,6 +1970,13 @@ export default function App() {
 
   function handleTextSelection(event: ReactMouseEvent<HTMLDivElement>) {
     if (event.button !== 0) return;
+    if (suppressNextSelectionMouseUpRef.current) {
+      suppressNextSelectionMouseUpRef.current = false;
+      selectionDismissPointerRef.current = null;
+      setPendingDraft(null);
+      closeSelectionContextMenu({ clearPendingDraft: true });
+      return;
+    }
     const nextDraft = buildDraftFromSelection(false);
     setPendingDraft(nextDraft);
     if (!settings.slideAnnotate || !nextDraft) {
@@ -1918,6 +2027,7 @@ export default function App() {
     if (!reader || !articleRef.current) return null;
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) return null;
+    if (selection.isCollapsed) return null;
     const range = selection.getRangeAt(0);
     if (!articleRef.current.contains(range.commonAncestorContainer)) return null;
     const renderedSelection = getRenderedSelectionAnchor(articleRef.current, selection);
@@ -2157,16 +2267,36 @@ export default function App() {
     }
   }
 
-  function scrollToHeading(title: string) {
-    if (!articleRef.current) return;
-    const headings = articleRef.current.querySelectorAll("h1, h2, h3, h4, h5, h6");
-    for (const heading of headings) {
-      if (heading.textContent?.trim() === title) {
-        playReaderMotion("jump");
-        heading.scrollIntoView({ behavior: "smooth", block: "start" });
+  function syncReaderOutlineHeadings() {
+    if (!reader || !articleRef.current) return [];
+    const renderedHeadings = Array.from(
+      articleRef.current.querySelectorAll<HTMLElement>(
+        "h1[data-outline-id], h2[data-outline-id], h3[data-outline-id], h4[data-outline-id], h5[data-outline-id], h6[data-outline-id]",
+      ),
+    );
+    if (renderedHeadings.length > 0) return renderedHeadings;
+
+    const outlineHeadings: HTMLElement[] = [];
+    const headings = articleRef.current.querySelectorAll<HTMLElement>("h1, h2, h3, h4, h5, h6");
+    headings.forEach((heading, index) => {
+      const outlineItem = reader.outline[index];
+      if (!outlineItem) {
+        heading.removeAttribute("data-outline-id");
         return;
       }
-    }
+      heading.dataset.outlineId = outlineItem.id;
+      heading.id = `outline-${outlineItem.id}`;
+      outlineHeadings.push(heading);
+    });
+    return outlineHeadings;
+  }
+
+  function scrollToHeading(outlineId: string) {
+    const heading = syncReaderOutlineHeadings().find((item) => item.dataset.outlineId === outlineId);
+    if (!heading) return;
+    setActiveOutlineId(outlineId);
+    playReaderMotion("jump");
+    heading.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   async function handleExport() {
@@ -2844,7 +2974,8 @@ export default function App() {
     setContextMenu(position);
   }
 
-  function closeSelectionContextMenu() {
+  function closeSelectionContextMenu(options: { clearPendingDraft?: boolean } = {}) {
+    if (options.clearPendingDraft) setPendingDraft(null);
     if (!contextMenu) return;
     const closeToken = selectionMenuCloseTokenRef.current + 1;
     selectionMenuCloseTokenRef.current = closeToken;
@@ -3732,13 +3863,16 @@ export default function App() {
         <div className="pane-header outline-heading">
           <span>大纲</span>
         </div>
-        <div className="outline-list">
+        <div className="outline-list" ref={outlineListRef}>
           {reader?.outline.length ? (
             reader.outline.map((item) => (
               <button
                 key={item.id}
+                className={item.id === activeOutlineId ? "active" : ""}
+                data-outline-id={item.id}
+                aria-current={item.id === activeOutlineId ? "location" : undefined}
                 style={{ paddingLeft: `${8 + item.level * 10}px` }}
-                onClick={() => scrollToHeading(item.title)}
+                onClick={() => scrollToHeading(item.id)}
               >
                 {item.title}
               </button>
