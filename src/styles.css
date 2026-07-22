@@ -4644,6 +4644,7 @@ button:disabled {
 }
 
 .markdown-body .mermaid-figure {
+  position: relative;
   overflow: auto;
   margin: 0 0 var(--reader-paragraph-spacing);
   border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
@@ -4658,6 +4659,25 @@ button:disabled {
   min-width: 560px;
   min-height: 96px;
   color: var(--ink);
+}
+
+.markdown-body .mermaid-diagram.is-rendered {
+  border-radius: 6px;
+  cursor: zoom-in;
+  outline: none;
+  transition:
+    filter 160ms ease,
+    transform 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.markdown-body .mermaid-diagram.is-rendered:hover {
+  filter: saturate(1.04) contrast(1.02);
+  transform: translateY(-1px);
+}
+
+.markdown-body .mermaid-diagram.is-rendered:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 .markdown-body .mermaid-diagram:not(.is-rendered):not(.is-error) {
@@ -4683,6 +4703,7 @@ button:disabled {
 
 .markdown-body .mermaid-diagram.is-error {
   min-width: 0;
+  cursor: auto;
 }
 
 .markdown-body .mermaid-error-title {
@@ -5188,8 +5209,20 @@ button:disabled {
   user-select: none;
 }
 
+.image-preview-frame.is-mermaid img {
+  max-width: min(96vw, 100%);
+  max-height: calc(100vh - var(--titlebar-height) - 88px);
+  border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+  background: var(--paper);
+  padding: 18px;
+}
+
 .reader-shell.reading-fullscreen .image-preview-frame img {
   max-height: calc(100vh - 72px);
+}
+
+.reader-shell.reading-fullscreen .image-preview-frame.is-mermaid img {
+  max-height: calc(100vh - 88px);
 }
 
 .image-preview-zoom {

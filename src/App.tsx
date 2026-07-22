@@ -181,6 +181,7 @@ interface ImagePreviewState {
   src: string;
   alt: string;
   scale: number;
+  kind: "image" | "mermaid";
 }
 
 interface ChangeHighlightBase {
@@ -2164,11 +2165,30 @@ export default function App() {
       return;
     }
 
+    const mermaidDiagram = target.closest<HTMLElement>(".mermaid-diagram.is-rendered");
+    if (mermaidDiagram && articleRef.current?.contains(mermaidDiagram)) {
+      event.preventDefault();
+      event.stopPropagation();
+      openMermaidPreview(mermaidDiagram);
+      return;
+    }
+
     const mark = target.closest<HTMLElement>("[data-annotation-id]");
     if (mark) {
       const annotationId = mark.dataset.annotationId;
       if (annotationId) openReaderAnnotationDetail(annotationId);
     }
+  }
+
+  function handleReaderArticleKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+    if (event.key !== "Enter" && event.key !== " ") return;
+
+    const target = event.target as HTMLElement;
+    const mermaidDiagram = target.closest<HTMLElement>(".mermaid-diagram.is-rendered");
+    if (!mermaidDiagram || !articleRef.current?.contains(mermaidDiagram)) return;
+
+    event.preventDefault();
+    openMermaidPreview(mermaidDiagram);
   }
 
   function openImagePreview(image: HTMLImageElement) {
@@ -2180,7 +2200,32 @@ export default function App() {
       src: image.currentSrc || image.src,
       alt: image.alt || "Markdown 图片",
       scale: 1,
+      kind: "image",
     });
+  }
+
+  function openMermaidPreview(diagram: HTMLElement) {
+    const svg = diagram.querySelector<SVGSVGElement>("svg");
+    if (!svg) return;
+
+    closeSelectionContextMenu();
+    closeAnnotationMenu();
+    closeChapterMenu();
+    setImagePreviewClosing(false);
+    setImagePreview({
+      src: serializeSvgToDataUrl(svg),
+      alt: svg.querySelector("title")?.textContent?.trim() || "Mermaid 图表",
+      scale: 1,
+      kind: "mermaid",
+    });
+  }
+
+  function serializeSvgToDataUrl(svg: SVGSVGElement) {
+    const clone = svg.cloneNode(true) as SVGSVGElement;
+    if (!clone.getAttribute("xmlns")) {
+      clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    }
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(clone))}`;
   }
 
   function closeImagePreview() {
@@ -3782,7 +3827,12 @@ export default function App() {
           onClick={closeImagePreview}
           onWheel={handleImagePreviewWheel}
         >
-          <div className="image-preview-frame" onClick={(event) => event.stopPropagation()}>
+          <div
+            className={`image-preview-frame ${
+              imagePreview.kind === "mermaid" ? "is-mermaid" : ""
+            }`}
+            onClick={(event) => event.stopPropagation()}
+          >
             <img
               src={imagePreview.src}
               alt={imagePreview.alt}
@@ -3968,6 +4018,7 @@ export default function App() {
             onMouseUp={handleTextSelection}
             onContextMenu={handleReaderContextMenu}
             onClick={handleAnnotationClick}
+            onKeyDown={handleReaderArticleKeyDown}
             dangerouslySetInnerHTML={{ __html: renderedHtml }}
           />
           {reader && (

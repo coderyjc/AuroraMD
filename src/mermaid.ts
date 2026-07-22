@@ -16,6 +16,7 @@ export async function renderMermaidDiagrams(root: HTMLElement) {
 
     diagram.classList.remove("is-rendered", "is-error");
     diagram.removeAttribute("data-mermaid-error");
+    clearMermaidPreviewAttributes(diagram);
 
     try {
       mermaidRenderId += 1;
@@ -26,13 +27,33 @@ export async function renderMermaidDiagrams(root: HTMLElement) {
       );
       diagram.innerHTML = svg;
       bindFunctions?.(diagram);
+      setMermaidPreviewAttributes(diagram);
       diagram.classList.add("is-rendered");
     } catch (err) {
       diagram.innerHTML = renderMermaidError(source, readErrorMessage(err));
       diagram.dataset.mermaidError = "true";
+      clearMermaidPreviewAttributes(diagram);
       diagram.classList.add("is-error");
     }
   }
+}
+
+function setMermaidPreviewAttributes(diagram: HTMLElement) {
+  diagram.dataset.readerMermaidDiagram = "true";
+  diagram.tabIndex = 0;
+  diagram.setAttribute("role", "button");
+  diagram.setAttribute("aria-label", "放大 Mermaid 图表");
+
+  const svg = diagram.querySelector<SVGSVGElement>("svg");
+  svg?.setAttribute("draggable", "false");
+  svg?.setAttribute("focusable", "false");
+}
+
+function clearMermaidPreviewAttributes(diagram: HTMLElement) {
+  delete diagram.dataset.readerMermaidDiagram;
+  diagram.removeAttribute("role");
+  diagram.removeAttribute("aria-label");
+  diagram.removeAttribute("tabindex");
 }
 
 async function loadMermaid() {
