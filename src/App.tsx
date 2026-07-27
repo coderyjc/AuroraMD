@@ -181,6 +181,8 @@ interface ImagePreviewState {
   src: string;
   alt: string;
   scale: number;
+  x: number;
+  y: number;
   kind: "image" | "mermaid";
 }
 
@@ -194,7 +196,13 @@ type ViewTransitionDocument = Document & {
   startViewTransition?: (callback: () => void) => { finished: Promise<void> };
 };
 
-type BookTableSortKey = "name" | "chapterCount" | "annotationCount" | "createdAt" | "lastOpenedAt";
+type BookTableSortKey =
+  | "name"
+  | "rootPath"
+  | "chapterCount"
+  | "annotationCount"
+  | "createdAt"
+  | "lastOpenedAt";
 type SortDirection = "asc" | "desc";
 type BookTableResizableColumnKey = HomeTableColumnKey | "name";
 
@@ -218,6 +226,7 @@ const defaultBookTableSort: BookTableSortState = { key: "lastOpenedAt", directio
 const defaultBookTableColumnWidths: Record<BookTableResizableColumnKey, number> = {
   rowNumber: 72,
   name: 360,
+  rootPath: 320,
   chapterCount: 116,
   annotationCount: 116,
   createdAt: 156,
@@ -227,6 +236,7 @@ const defaultBookTableColumnWidths: Record<BookTableResizableColumnKey, number> 
 const bookTableColumnMinWidths: Record<BookTableResizableColumnKey, number> = {
   rowNumber: 56,
   name: 220,
+  rootPath: 220,
   chapterCount: 96,
   annotationCount: 96,
   createdAt: 128,
@@ -236,6 +246,7 @@ const bookTableColumnMinWidths: Record<BookTableResizableColumnKey, number> = {
 const bookTableColumnMaxWidths: Record<BookTableResizableColumnKey, number> = {
   rowNumber: 120,
   name: 620,
+  rootPath: 680,
   chapterCount: 180,
   annotationCount: 180,
   createdAt: 240,
@@ -390,6 +401,7 @@ function parseHomeTableColumns(value: string): Record<HomeTableColumnKey, boolea
     const parsed = JSON.parse(value) as Partial<Record<HomeTableColumnKey, unknown>>;
     return {
       rowNumber: parsed.rowNumber === undefined ? true : Boolean(parsed.rowNumber),
+      rootPath: parsed.rootPath === undefined ? true : Boolean(parsed.rootPath),
       chapterCount: parsed.chapterCount === undefined ? true : Boolean(parsed.chapterCount),
       annotationCount: parsed.annotationCount === undefined ? true : Boolean(parsed.annotationCount),
       createdAt: parsed.createdAt === undefined ? true : Boolean(parsed.createdAt),
@@ -416,6 +428,9 @@ function formatBookDate(value?: string | null) {
 function compareBookValues(left: BookSummary, right: BookSummary, key: BookTableSortKey) {
   if (key === "name") {
     return left.name.localeCompare(right.name, "zh-CN", { numeric: true, sensitivity: "base" });
+  }
+  if (key === "rootPath") {
+    return left.rootPath.localeCompare(right.rootPath, "zh-CN", { numeric: true, sensitivity: "base" });
   }
   if (key === "chapterCount") return left.chapterCount - right.chapterCount;
   if (key === "annotationCount") return left.annotationCount - right.annotationCount;
@@ -540,6 +555,7 @@ export default function App() {
   const [enhancedMarkdownKey, setEnhancedMarkdownKey] = useState("");
   const [imagePreview, setImagePreview] = useState<ImagePreviewState | null>(null);
   const [imagePreviewClosing, setImagePreviewClosing] = useState(false);
+  const [imagePreviewDragging, setImagePreviewDragging] = useState(false);
   const [showChangeHighlights, setShowChangeHighlights] = useState(false);
   const [changeHighlightBusy, setChangeHighlightBusy] = useState(false);
   const [changeHighlightBase, setChangeHighlightBase] = useState<ChangeHighlightBase | null>(null);
@@ -554,6 +570,14 @@ export default function App() {
   const readerSearchInputRef = useRef<HTMLInputElement | null>(null);
   const bookCollectionRef = useRef<HTMLElement | null>(null);
   const readerMotionTimerRef = useRef<number | null>(null);
+  const imagePreviewDragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+  } | null>(null);
+  const imagePreviewDidDragRef = useRef(false);
   const latestSettingsRef = useRef<AppSettings>(defaultSettings);
   const searchThemeSnapshotRef = useRef<Pick<AppSettings, "themeSeries" | "theme"> | null>(null);
 
@@ -1327,6 +1351,7 @@ export default function App() {
     const columns = ["42px"];
     if (homeTableColumns.rowNumber) columns.push(`${bookTableColumnWidths.rowNumber}px`);
     columns.push(`${bookTableColumnWidths.name}px`);
+    if (homeTableColumns.rootPath) columns.push(`${bookTableColumnWidths.rootPath}px`);
     if (homeTableColumns.chapterCount) columns.push(`${bookTableColumnWidths.chapterCount}px`);
     if (homeTableColumns.annotationCount) columns.push(`${bookTableColumnWidths.annotationCount}px`);
     if (homeTableColumns.createdAt) columns.push(`${bookTableColumnWidths.createdAt}px`);
@@ -2200,6 +2225,8 @@ export default function App() {
       src: image.currentSrc || image.src,
       alt: image.alt || "Markdown 图片",
       scale: 1,
+      x: 0,
+      y: 0,
       kind: "image",
     });
   }
@@ -2216,6 +2243,8 @@ export default function App() {
       src: serializeSvgToDataUrl(svg),
       alt: svg.querySelector("title")?.textContent?.trim() || "Mermaid 图表",
       scale: 1,
+      x: 0,
+      y: 0,
       kind: "mermaid",
     });
   }
@@ -2230,6 +2259,9 @@ export default function App() {
 
   function closeImagePreview() {
     if (!imagePreview || imagePreviewClosing) return;
+    imagePreviewDragRef.current = null;
+    imagePreviewDidDragRef.current = false;
+    setImagePreviewDragging(false);
     animateClose(setImagePreviewClosing, () => setImagePreview(null));
   }
 
@@ -2244,6 +2276,64 @@ export default function App() {
         scale: clamp(preview.scale + direction * 0.16, 0.28, 5),
       };
     });
+  }
+
+  function handleImagePreviewPointerDown(event: ReactPointerEvent<HTMLImageElement>) {
+    if (event.button !== 0 || !imagePreview) return;
+    event.preventDefault();
+    event.stopPropagation();
+    imagePreviewDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: imagePreview.x,
+      originY: imagePreview.y,
+    };
+    imagePreviewDidDragRef.current = false;
+    setImagePreviewDragging(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function handleImagePreviewPointerMove(event: ReactPointerEvent<HTMLImageElement>) {
+    const drag = imagePreviewDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const deltaX = event.clientX - drag.startX;
+    const deltaY = event.clientY - drag.startY;
+    if (Math.abs(deltaX) + Math.abs(deltaY) > 3) {
+      imagePreviewDidDragRef.current = true;
+    }
+    setImagePreview((preview) =>
+      preview
+        ? {
+            ...preview,
+            x: drag.originX + deltaX,
+            y: drag.originY + deltaY,
+          }
+        : preview,
+    );
+  }
+
+  function handleImagePreviewPointerEnd(event: ReactPointerEvent<HTMLImageElement>) {
+    const drag = imagePreviewDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    imagePreviewDragRef.current = null;
+    setImagePreviewDragging(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  function handleImagePreviewImageClick(event: ReactMouseEvent<HTMLImageElement>) {
+    event.stopPropagation();
+    if (imagePreviewDidDragRef.current) {
+      imagePreviewDidDragRef.current = false;
+      return;
+    }
+    closeImagePreview();
   }
 
   function handleAnnotationContextMenu(
@@ -3536,6 +3626,8 @@ export default function App() {
                     {homeTableColumns.rowNumber &&
                       renderBookTableHeaderCell("rowNumber", "行号")}
                     {renderBookTableHeaderCell("name", "标题", "name")}
+                    {homeTableColumns.rootPath &&
+                      renderBookTableHeaderCell("rootPath", "来源目录", "rootPath")}
                     {homeTableColumns.chapterCount &&
                       renderBookTableHeaderCell("chapterCount", "章节数量", "chapterCount")}
                     {homeTableColumns.annotationCount &&
@@ -3582,8 +3674,10 @@ export default function App() {
                         )}
                         <div className="book-table-cell book-table-title-cell">
                           <strong>{book.name}</strong>
-                          <small>{book.rootPath}</small>
                         </div>
+                        {homeTableColumns.rootPath && (
+                          <div className="book-table-cell book-table-path-cell">{book.rootPath}</div>
+                        )}
                         {homeTableColumns.chapterCount && (
                           <div className="book-table-cell number">{book.chapterCount}</div>
                         )}
@@ -3830,14 +3924,20 @@ export default function App() {
           <div
             className={`image-preview-frame ${
               imagePreview.kind === "mermaid" ? "is-mermaid" : ""
-            }`}
+            } ${imagePreviewDragging ? "is-dragging" : ""}`}
             onClick={(event) => event.stopPropagation()}
           >
             <img
               src={imagePreview.src}
               alt={imagePreview.alt}
-              style={{ transform: `scale(${imagePreview.scale})` }}
-              onClick={closeImagePreview}
+              style={{
+                transform: `translate3d(${imagePreview.x}px, ${imagePreview.y}px, 0) scale(${imagePreview.scale})`,
+              }}
+              onClick={handleImagePreviewImageClick}
+              onPointerDown={handleImagePreviewPointerDown}
+              onPointerMove={handleImagePreviewPointerMove}
+              onPointerUp={handleImagePreviewPointerEnd}
+              onPointerCancel={handleImagePreviewPointerEnd}
               draggable={false}
             />
             <span className="image-preview-zoom">

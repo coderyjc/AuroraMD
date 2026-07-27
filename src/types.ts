@@ -163,6 +163,7 @@ export type HomeView = HomeLibraryView | "notes";
 
 export type HomeTableColumnKey =
   | "rowNumber"
+  | "rootPath"
   | "chapterCount"
   | "annotationCount"
   | "createdAt"

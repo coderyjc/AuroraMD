@@ -659,6 +659,7 @@ export const defaultShortcutBindings: ShortcutBindings = {
 
 export const homeTableColumnOptions = [
   { id: "rowNumber", label: "行号", description: "显示当前排序后的序号。" },
+  { id: "rootPath", label: "来源目录", description: "单独显示书籍导入时记录的本地目录。" },
   { id: "chapterCount", label: "章节数量", description: "显示书籍内 Markdown 章节数量。" },
   { id: "annotationCount", label: "批注数量", description: "显示书籍累计批注数量。" },
   { id: "createdAt", label: "上传时间", description: "显示书籍导入到 AuroraMD 的时间。" },
@@ -667,6 +668,7 @@ export const homeTableColumnOptions = [
 
 export const defaultHomeTableColumns: Record<HomeTableColumnKey, boolean> = {
   rowNumber: true,
+  rootPath: true,
   chapterCount: true,
   annotationCount: true,
   createdAt: true,

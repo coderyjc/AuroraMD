@@ -93,6 +93,7 @@ function parseHomeTableColumns(value: string): Record<HomeTableColumnKey, boolea
     const parsed = JSON.parse(value) as Partial<Record<HomeTableColumnKey, unknown>>;
     return {
       rowNumber: parsed.rowNumber === undefined ? true : Boolean(parsed.rowNumber),
+      rootPath: parsed.rootPath === undefined ? true : Boolean(parsed.rootPath),
       chapterCount: parsed.chapterCount === undefined ? true : Boolean(parsed.chapterCount),
       annotationCount: parsed.annotationCount === undefined ? true : Boolean(parsed.annotationCount),
       createdAt: parsed.createdAt === undefined ? true : Boolean(parsed.createdAt),

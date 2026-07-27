@@ -3422,6 +3422,7 @@ button:disabled {
 
 .book-table-title-cell strong,
 .book-table-title-cell small,
+.book-table-path-cell,
 .book-table-cell.date {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3435,6 +3436,7 @@ button:disabled {
 }
 
 .book-table-title-cell small,
+.book-table-path-cell,
 .book-table-cell.date {
   color: var(--muted);
   font-size: 12px;
@@ -4495,6 +4497,13 @@ button:disabled {
   color: var(--selection-ink);
 }
 
+.markdown-body pre::selection,
+.markdown-body pre ::selection {
+  background: rgba(116, 158, 255, 0.5);
+  color: #ffffff;
+  text-shadow: none;
+}
+
 .border-hairline .markdown-body {
   border: 1px solid rgba(32, 33, 29, 0.16);
 }
@@ -5202,11 +5211,17 @@ button:disabled {
   max-height: calc(100vh - var(--titlebar-height) - 72px);
   border-radius: 8px;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
-  cursor: zoom-out;
+  cursor: grab;
   object-fit: contain;
   transform-origin: center;
   transition: transform 120ms ease-out;
+  touch-action: none;
   user-select: none;
+}
+
+.image-preview-frame.is-dragging img {
+  cursor: grabbing;
+  transition: none;
 }
 
 .image-preview-frame.is-mermaid img {
