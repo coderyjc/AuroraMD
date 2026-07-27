@@ -2,6 +2,7 @@ import {
   ArrowLeft,
   ChevronLeft,
   ChevronRight,
+  Check,
   Download,
   FileText,
   FolderPlus,
@@ -40,6 +41,7 @@ import {
   createAnnotation,
   createAutoBackup,
   createExportPreset,
+  clearChapterReadingProgress,
   deleteAnnotation,
   deleteBook,
   deleteChapter,
@@ -55,6 +57,7 @@ import {
   listChapters,
   listExportPresets,
   listNoteItems,
+  listReadingProgress,
   listSystemFonts,
   markBookOpened,
   markAnnotationsStatus,
@@ -150,6 +153,7 @@ import type {
   ImportBookPreview,
   NoteItem,
   ReadChapterResponse,
+  ReadingProgress,
   ShortcutAction,
   SystemFont,
 } from "./types";
@@ -264,6 +268,8 @@ const fullscreenTopKeepPx = 126;
 const fullscreenSideKeepPaddingPx = 36;
 const fullscreenTopPollMs = 80;
 const fullscreenTopCursorPx = 8;
+const readingProgressCompleteThreshold = 0.995;
+const readingProgressCompleteRemainingPx = 2;
 const windowPlacementStorageKey = "auroramd.windowPlacement.v1";
 const legacyWindowPlacementStorageKeys = ["annotaloop.windowPlacement.v1"];
 const windowPlacementSaveDelayMs = 320;
@@ -462,6 +468,7 @@ export default function App() {
   const [importModalClosing, setImportModalClosing] = useState(false);
   const [activeBook, setActiveBook] = useState<ReaderBook | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
+  const [chapterProgress, setChapterProgress] = useState<Record<string, ReadingProgress>>({});
   const [reader, setReader] = useState<ReadChapterResponse | null>(null);
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
   const [systemFonts, setSystemFonts] = useState<SystemFont[]>([]);
@@ -950,14 +957,24 @@ export default function App() {
     const element = scrollRef.current;
     let timeout: number | undefined;
     const onScroll = () => {
+      if (isChapterProgressComplete(chapterProgress[reader.chapter.id])) return;
       if (timeout) window.clearTimeout(timeout);
       timeout = window.setTimeout(() => {
+        if (isChapterProgressComplete(chapterProgress[reader.chapter.id])) return;
         void saveReadingProgress(
           activeBook.id,
           reader.chapter.id,
           reader.version.id,
           element.scrollTop,
-        );
+          getScrollProgressRatio(element),
+        )
+          .then((saved) => {
+            setChapterProgress((current) => ({
+              ...current,
+              [saved.chapterId]: saved,
+            }));
+          })
+          .catch((err) => setError(readError(err)));
       }, 500);
     };
     element.addEventListener("scroll", onScroll);
@@ -965,7 +982,7 @@ export default function App() {
       if (timeout) window.clearTimeout(timeout);
       element.removeEventListener("scroll", onScroll);
     };
-  }, [activeBook, reader]);
+  }, [activeBook, chapterProgress, reader]);
 
   const renderedHtml = useMemo(() => {
     if (!reader) return "";
@@ -1733,16 +1750,27 @@ export default function App() {
     setChapterMenu(null);
     setDeleteChapterDraft(null);
     try {
-      const nextChapters = await listChapters(book.id);
+      const [nextChapters, progressItems] = await Promise.all([
+        listChapters(book.id),
+        listReadingProgress(book.id),
+      ]);
       if (!nextChapters.length) {
         throw new Error("这本书没有可读章节。");
       }
       let nextReader: ReadChapterResponse;
       if (targetChapterId && nextChapters.some((chapter) => chapter.id === targetChapterId)) {
-        nextReader = await readChapter(targetChapterId);
-        setPendingScroll(0);
+        const progress = progressItems.find((item) => item.chapterId === targetChapterId);
+        if (progress) {
+          nextReader = await readChapterVersion(progress.chapterVersionId).catch(() =>
+            readChapter(progress.chapterId),
+          );
+          setPendingScroll(progress.scrollTop);
+        } else {
+          nextReader = await readChapter(targetChapterId);
+          setPendingScroll(0);
+        }
       } else {
-        const progress = await getLatestReadingProgress(book.id);
+        const progress = progressItems[0] ?? (await getLatestReadingProgress(book.id));
         if (progress) {
           nextReader = await readChapterVersion(progress.chapterVersionId).catch(() =>
             readChapter(progress.chapterId),
@@ -1757,6 +1785,7 @@ export default function App() {
       runViewTransition(() => {
         setActiveBook({ ...book, lastOpenedAt: openedBook.lastOpenedAt });
         setChapters(nextChapters);
+        setChapterProgress(buildChapterProgressMap(progressItems));
         setReader(nextReader);
       });
     } catch (err) {
@@ -1778,7 +1807,10 @@ export default function App() {
     setAnnotationMenu(null);
     setChapterMenu(null);
     try {
-      const nextChapters = await listChapters(note.bookId);
+      const [nextChapters, progressItems] = await Promise.all([
+        listChapters(note.bookId),
+        listReadingProgress(note.bookId),
+      ]);
       const nextReader = await readChapterVersion(note.chapterVersionId).catch(() =>
         readChapter(note.chapterId),
       );
@@ -1802,6 +1834,7 @@ export default function App() {
           },
         );
         setChapters(nextChapters);
+        setChapterProgress(buildChapterProgressMap(progressItems));
         setReader(nextReader);
       });
       selectReaderAnnotation(note.id);
@@ -1826,7 +1859,10 @@ export default function App() {
     setAnnotationMenu(null);
     setChapterMenu(null);
     try {
-      const nextChapters = await listChapters(result.bookId);
+      const [nextChapters, progressItems] = await Promise.all([
+        listChapters(result.bookId),
+        listReadingProgress(result.bookId),
+      ]);
       const nextReader = await readChapterVersion(result.chapterVersionId).catch(() =>
         readChapter(result.chapterId),
       );
@@ -1850,6 +1886,7 @@ export default function App() {
           },
         );
         setChapters(nextChapters);
+        setChapterProgress(buildChapterProgressMap(progressItems));
         setReader(nextReader);
       });
       setActiveSearchHighlight({
@@ -1877,10 +1914,13 @@ export default function App() {
     setAnnotationMenu(null);
     setChapterMenu(null);
     try {
-      const nextReader = await readChapter(chapterId);
+      const progress = chapterProgress[chapterId];
+      const nextReader = progress
+        ? await readChapterVersion(progress.chapterVersionId).catch(() => readChapter(chapterId))
+        : await readChapter(chapterId);
       playReaderMotion("content");
       setReader(nextReader);
-      setPendingScroll(0);
+      setPendingScroll(progress ? progress.scrollTop : 0);
     } catch (err) {
       setError(readError(err));
     } finally {
@@ -1920,8 +1960,24 @@ export default function App() {
     setChapterMenu({
       chapter,
       x: Math.min(event.clientX, window.innerWidth - 218),
-      y: Math.min(event.clientY, window.innerHeight - 132),
+      y: Math.min(event.clientY, window.innerHeight - 176),
     });
+  }
+
+  async function markChapterUnreadFromMenu(chapter: Chapter) {
+    closeChapterMenu();
+    setError("");
+    try {
+      await clearChapterReadingProgress(chapter.id);
+      setChapterProgress((current) => {
+        const next = { ...current };
+        delete next[chapter.id];
+        return next;
+      });
+      setNotice(`已将“${chapterFileName(chapter)}”标为未读。`);
+    } catch (err) {
+      setError(readError(err));
+    }
   }
 
   async function refreshChapterFromMenu(chapter: Chapter) {
@@ -1937,7 +1993,15 @@ export default function App() {
       const previousVersionId = chapter.currentVersionId;
       const refreshedVersion = await refreshChapterVersion(chapter.id);
       const nextChapters = await listChapters(chapter.bookId);
+      const hasNewVersion = refreshedVersion.id !== previousVersionId;
       setChapters(nextChapters);
+      if (hasNewVersion) {
+        setChapterProgress((current) => {
+          const next = { ...current };
+          delete next[chapter.id];
+          return next;
+        });
+      }
       setActiveBook((current) => {
         if (!current || current.id !== chapter.bookId || !("chapterCount" in current)) {
           return current;
@@ -1948,13 +2012,13 @@ export default function App() {
         const nextReader = await readChapter(chapter.id);
         playReaderMotion("content");
         setReader(nextReader);
-        setPendingScroll(0);
+        setPendingScroll(hasNewVersion ? 0 : chapterProgress[chapter.id]?.scrollTop ?? 0);
       }
       void refreshBooks();
       void refreshNotes();
       const chapterName = chapterFileName(chapter);
       setNotice(
-        refreshedVersion.id === previousVersionId
+        !hasNewVersion
           ? `章节“${chapterName}”已经是最新。`
           : `已更新章节“${chapterName}”，生成 v${refreshedVersion.versionNumber}。`,
       );
@@ -2002,6 +2066,11 @@ export default function App() {
       const nextSelected = nextChapters[Math.min(deletedIndex, nextChapters.length - 1)] ?? null;
       closeDeleteChapterModal();
       setChapters(nextChapters);
+      setChapterProgress((current) => {
+        const next = { ...current };
+        delete next[draft.id];
+        return next;
+      });
       setActiveBook((current) => {
         if (!current || current.id !== draft.bookId || !("chapterCount" in current)) {
           return current;
@@ -2020,6 +2089,7 @@ export default function App() {
             setActiveBook(null);
             setReader(null);
             setChapters([]);
+            setChapterProgress({});
           });
         }
       }
@@ -4026,6 +4096,8 @@ export default function App() {
             runViewTransition(() => {
               setActiveBook(null);
               setReader(null);
+              setChapters([]);
+              setChapterProgress({});
             });
             void refreshBooks();
             void refreshNotes();
@@ -4045,17 +4117,20 @@ export default function App() {
           </button>
         </div>
         <div className="chapter-list">
-          {chapters.map((chapter) => (
-            <button
-              key={chapter.id}
-              className={`chapter-row ${reader?.chapter.id === chapter.id ? "active" : ""}`}
-              onClick={() => void selectChapter(chapter.id)}
-              onContextMenu={(event) => handleChapterContextMenu(event, chapter)}
-            >
-              <FileText size={15} />
-              <span>{chapterFileName(chapter)}</span>
-            </button>
-          ))}
+          {chapters.map((chapter) => {
+            const progress = chapterProgress[chapter.id];
+            return (
+              <button
+                key={chapter.id}
+                className={`chapter-row ${reader?.chapter.id === chapter.id ? "active" : ""}`}
+                onClick={() => void selectChapter(chapter.id)}
+                onContextMenu={(event) => handleChapterContextMenu(event, chapter)}
+              >
+                <ChapterProgressIcon progress={progress} />
+                <span>{chapterFileName(chapter)}</span>
+              </button>
+            );
+          })}
         </div>
 
         <div
@@ -4384,6 +4459,7 @@ export default function App() {
           x={chapterMenu.x}
           y={chapterMenu.y}
           closing={chapterMenuClosing}
+          onMarkUnread={() => void markChapterUnreadFromMenu(chapterMenu.chapter)}
           onRefresh={() => void refreshChapterFromMenu(chapterMenu.chapter)}
           onOpenInExplorer={() => void openChapterSourceInExplorer(chapterMenu.chapter)}
           onDelete={() => requestDeleteReaderChapter(chapterMenu.chapter)}
@@ -4479,6 +4555,7 @@ function translateErrorMessage(message: string) {
     ["Failed to export backup:", "导出备份失败："],
     ["Failed to open backup database:", "打开备份数据库失败："],
     ["Failed to restore backup:", "恢复备份失败："],
+    ["Failed to restore reading progress ratios:", "恢复阅读进度百分比失败："],
     ["Failed to restore annotation anchors:", "恢复批注锚点失败："],
     ["Failed to restore focus mode setting:", "恢复聚焦模式设置失败："],
     ["Failed to restore slide annotation setting:", "恢复划动批注设置失败："],
@@ -4489,6 +4566,7 @@ function translateErrorMessage(message: string) {
     ["Failed to restore auto backup settings:", "恢复自动备份设置失败："],
     ["Failed to update settings:", "更新设置失败："],
     ["Failed to save reading progress:", "保存阅读进度失败："],
+    ["Failed to clear chapter reading progress:", "清除章节阅读进度失败："],
     ["Failed to start import transaction:", "启动导入事务失败："],
     ["Failed to create book:", "创建书籍失败："],
     ["Failed to create chapter:", "创建章节失败："],
@@ -4521,6 +4599,57 @@ function translateErrorMessage(message: string) {
 function clamp(value: number, min: number, max: number) {
   const upper = Math.max(min, max);
   return Math.min(Math.max(value, min), upper);
+}
+
+function buildChapterProgressMap(progressItems: ReadingProgress[]) {
+  return progressItems.reduce<Record<string, ReadingProgress>>((map, item) => {
+    if (!map[item.chapterId]) {
+      map[item.chapterId] = item;
+    }
+    return map;
+  }, {});
+}
+
+function getScrollProgressRatio(element: HTMLElement) {
+  const maxScroll = element.scrollHeight - element.clientHeight;
+  if (maxScroll <= 1) return 1;
+  const remainingScroll = maxScroll - element.scrollTop;
+  const ratio = clamp(element.scrollTop / maxScroll, 0, 1);
+  return remainingScroll <= readingProgressCompleteRemainingPx ||
+    ratio >= readingProgressCompleteThreshold
+    ? 1
+    : ratio;
+}
+
+function isChapterProgressComplete(progress?: ReadingProgress) {
+  return Boolean(
+    progress && clamp(progress.progressRatio, 0, 1) >= readingProgressCompleteThreshold,
+  );
+}
+
+function ChapterProgressIcon({ progress }: { progress?: ReadingProgress }) {
+  if (!progress) return <FileText className="chapter-file-icon" size={15} aria-hidden="true" />;
+  const ratio = clamp(progress.progressRatio, 0, 1);
+  if (isChapterProgressComplete(progress)) {
+    return <Check className="chapter-progress-complete" size={15} aria-label="Completed" />;
+  }
+  const displayRatio = ratio > 0 ? ratio : progress.scrollTop > 0 ? 0.02 : 0;
+  const percent = Math.round(displayRatio * 100);
+  return (
+    <svg
+      className="chapter-progress-ring"
+      viewBox="0 0 18 18"
+      aria-label={`阅读进度 ${percent}%`}
+      style={
+        {
+          "--chapter-progress-offset": `${(43.98 * (1 - displayRatio)).toFixed(2)}`,
+        } as CSSProperties
+      }
+    >
+      <circle className="chapter-progress-track" cx="9" cy="9" r="7" />
+      <circle className="chapter-progress-value" cx="9" cy="9" r="7" />
+    </svg>
+  );
 }
 
 function isHomeImportDragBlocked() {

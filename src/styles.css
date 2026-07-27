@@ -4235,6 +4235,44 @@ button:disabled {
   flex: 0 0 auto;
 }
 
+.chapter-file-icon {
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+}
+
+.chapter-progress-ring {
+  width: 18px;
+  height: 18px;
+  color: color-mix(in srgb, var(--accent) 86%, var(--ink));
+  transform: rotate(-90deg);
+}
+
+.chapter-progress-complete {
+  width: 18px;
+  height: 18px;
+  color: color-mix(in srgb, var(--accent) 92%, var(--ink));
+  stroke-width: 3;
+}
+
+.chapter-progress-track,
+.chapter-progress-value {
+  fill: none;
+  stroke-width: 2;
+}
+
+.chapter-progress-track {
+  stroke: color-mix(in srgb, var(--accent) 18%, var(--line));
+}
+
+.chapter-progress-value {
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-dasharray: 43.98;
+  stroke-dashoffset: var(--chapter-progress-offset);
+  transition: stroke-dashoffset 180ms ease;
+}
+
 .chapter-row:hover,
 .chapter-row.active,
 .outline-list button:hover,

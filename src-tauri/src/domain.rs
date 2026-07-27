@@ -306,6 +306,8 @@ pub struct ReadingProgressPayload {
     pub chapter_id: String,
     pub chapter_version_id: String,
     pub scroll_top: f64,
+    #[serde(default)]
+    pub progress_ratio: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -315,6 +317,7 @@ pub struct ReadingProgress {
     pub chapter_id: String,
     pub chapter_version_id: String,
     pub scroll_top: f64,
+    pub progress_ratio: f64,
     pub updated_at: String,
 }
 

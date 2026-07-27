@@ -234,12 +234,21 @@ export async function saveReadingProgress(
   chapterId: string,
   chapterVersionId: string,
   scrollTop: number,
+  progressRatio: number,
 ) {
   return invoke<ReadingProgress>("save_reading_progress", {
-    payload: { bookId, chapterId, chapterVersionId, scrollTop },
+    payload: { bookId, chapterId, chapterVersionId, scrollTop, progressRatio },
   });
 }
 
 export async function getLatestReadingProgress(bookId: string) {
   return invoke<ReadingProgress | null>("get_latest_reading_progress", { bookId });
+}
+
+export async function listReadingProgress(bookId: string) {
+  return invoke<ReadingProgress[]>("list_reading_progress", { bookId });
+}
+
+export async function clearChapterReadingProgress(chapterId: string) {
+  return invoke<void>("clear_chapter_reading_progress", { chapterId });
 }

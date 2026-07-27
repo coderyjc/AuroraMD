@@ -72,6 +72,7 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
             chapter_id TEXT NOT NULL,
             chapter_version_id TEXT NOT NULL,
             scroll_top REAL NOT NULL,
+            progress_ratio REAL NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL,
             PRIMARY KEY(book_id, chapter_id, chapter_version_id),
             FOREIGN KEY(book_id) REFERENCES books(id) ON DELETE CASCADE,
@@ -174,6 +175,12 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
         "annotations",
         "is_pinned",
         "ALTER TABLE annotations ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(
+        &conn,
+        "reading_progress",
+        "progress_ratio",
+        "ALTER TABLE reading_progress ADD COLUMN progress_ratio REAL NOT NULL DEFAULT 0",
     )?;
     ensure_column(
         &conn,

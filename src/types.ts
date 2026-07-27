@@ -205,6 +205,7 @@ export interface ReadingProgress {
   chapterId: string;
   chapterVersionId: string;
   scrollTop: number;
+  progressRatio: number;
   updatedAt: string;
 }
 

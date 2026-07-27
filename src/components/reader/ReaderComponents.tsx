@@ -8,6 +8,7 @@ import {
   Pin,
   PinOff,
   RefreshCw,
+  RotateCcw,
   Save,
   Trash2,
   X,
@@ -103,6 +104,7 @@ export function ChapterContextMenu({
   x,
   y,
   closing,
+  onMarkUnread,
   onRefresh,
   onOpenInExplorer,
   onDelete,
@@ -111,6 +113,7 @@ export function ChapterContextMenu({
   x: number;
   y: number;
   closing: boolean;
+  onMarkUnread: () => void;
   onRefresh: () => void;
   onOpenInExplorer: () => void;
   onDelete: () => void;
@@ -122,6 +125,9 @@ export function ChapterContextMenu({
       onClick={(event) => event.stopPropagation()}
       aria-label={`${chapterFileName(chapter)} 操作`}
     >
+      <button onClick={onMarkUnread}>
+        <RotateCcw size={15} /> 标为未读
+      </button>
       <button onClick={onRefresh}>
         <RefreshCw size={15} /> 更新
       </button>

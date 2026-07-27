@@ -1,5 +1,5 @@
 use rusqlite::{params, Connection, OptionalExtension};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -49,6 +49,8 @@ const INITIAL_WINDOW_MIN_HEIGHT: u32 = 680;
 const INITIAL_WINDOW_MIN_RESTORED_SIZE: u32 = 360;
 const INITIAL_WINDOW_EDGE_PADDING: u32 = 32;
 const PROJECT_REPOSITORY_URL: &str = "https://github.com/coderyjc/AuroraMD";
+const READING_PROGRESS_COMPLETE_RATIO: f64 = 1.0;
+const READING_PROGRESS_COMPLETE_THRESHOLD: f64 = 0.995;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -116,7 +118,9 @@ pub fn run() {
             update_settings,
             list_system_fonts,
             save_reading_progress,
-            get_latest_reading_progress
+            get_latest_reading_progress,
+            list_reading_progress,
+            clear_chapter_reading_progress
         ])
         .run(tauri::generate_context!())
         .expect("failed to run AuroraMD");
@@ -1912,6 +1916,31 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
         PRAGMA foreign_keys = ON;
         "#,
     );
+    let reading_progress_ratio_restore_result = if restore_result.is_ok()
+        && backup_has_column(&conn, "reading_progress", "progress_ratio")?
+    {
+        conn.execute_batch(
+            r#"
+            UPDATE reading_progress
+            SET progress_ratio = (
+                SELECT progress_ratio
+                FROM backup.reading_progress
+                WHERE backup.reading_progress.book_id = reading_progress.book_id
+                  AND backup.reading_progress.chapter_id = reading_progress.chapter_id
+                  AND backup.reading_progress.chapter_version_id = reading_progress.chapter_version_id
+            )
+            WHERE EXISTS (
+                SELECT 1
+                FROM backup.reading_progress
+                WHERE backup.reading_progress.book_id = reading_progress.book_id
+                  AND backup.reading_progress.chapter_id = reading_progress.chapter_id
+                  AND backup.reading_progress.chapter_version_id = reading_progress.chapter_version_id
+            );
+            "#,
+        )
+    } else {
+        Ok(())
+    };
     let rendered_anchor_restore_result = if restore_result.is_ok()
         && backup_has_column(&conn, "annotations", "rendered_start_offset")?
         && backup_has_column(&conn, "annotations", "rendered_end_offset")?
@@ -2266,6 +2295,8 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
         };
     let detach_result = conn.execute_batch("DETACH DATABASE backup;");
     restore_result.map_err(|error| format!("Failed to restore backup: {error}"))?;
+    reading_progress_ratio_restore_result
+        .map_err(|error| format!("Failed to restore reading progress ratios: {error}"))?;
     rendered_anchor_restore_result
         .map_err(|error| format!("Failed to restore annotation anchors: {error}"))?;
     focus_mode_restore_result
@@ -2553,6 +2584,29 @@ fn save_reading_progress(
 ) -> AppResult<ReadingProgress> {
     let conn = lock_conn(&state)?;
     let now = now();
+    if let Some(completed_progress) = conn
+        .query_row(
+            r#"
+            SELECT book_id, chapter_id, chapter_version_id, scroll_top, progress_ratio, updated_at
+            FROM reading_progress
+            WHERE book_id = ?1 AND chapter_id = ?2 AND progress_ratio >= ?3
+            ORDER BY updated_at DESC
+            LIMIT 1
+            "#,
+            params![
+                &payload.book_id,
+                &payload.chapter_id,
+                READING_PROGRESS_COMPLETE_THRESHOLD
+            ],
+            map_reading_progress,
+        )
+        .optional()
+        .map_err(db_error)?
+    {
+        return Ok(completed_progress);
+    }
+
+    let progress_ratio = normalize_reading_progress_ratio(payload.progress_ratio);
     conn.execute(
         r#"
         INSERT INTO reading_progress (
@@ -2560,10 +2614,12 @@ fn save_reading_progress(
             chapter_id,
             chapter_version_id,
             scroll_top,
+            progress_ratio,
             updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5)
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
         ON CONFLICT(book_id, chapter_id, chapter_version_id) DO UPDATE SET
             scroll_top = excluded.scroll_top,
+            progress_ratio = excluded.progress_ratio,
             updated_at = excluded.updated_at
         "#,
         params![
@@ -2571,6 +2627,7 @@ fn save_reading_progress(
             payload.chapter_id,
             payload.chapter_version_id,
             payload.scroll_top,
+            progress_ratio,
             now
         ],
     )
@@ -2581,6 +2638,7 @@ fn save_reading_progress(
         chapter_id: payload.chapter_id,
         chapter_version_id: payload.chapter_version_id,
         scroll_top: payload.scroll_top,
+        progress_ratio,
         updated_at: now,
     })
 }
@@ -2593,25 +2651,89 @@ fn get_latest_reading_progress(
     let conn = lock_conn(&state)?;
     conn.query_row(
         r#"
-        SELECT book_id, chapter_id, chapter_version_id, scroll_top, updated_at
+        SELECT book_id, chapter_id, chapter_version_id, scroll_top, progress_ratio, updated_at
         FROM reading_progress
         WHERE book_id = ?1
         ORDER BY updated_at DESC
         LIMIT 1
         "#,
         params![book_id],
-        |row| {
-            Ok(ReadingProgress {
-                book_id: row.get(0)?,
-                chapter_id: row.get(1)?,
-                chapter_version_id: row.get(2)?,
-                scroll_top: row.get(3)?,
-                updated_at: row.get(4)?,
-            })
-        },
+        map_reading_progress,
     )
     .optional()
     .map_err(db_error)
+}
+
+#[tauri::command]
+fn list_reading_progress(
+    book_id: String,
+    state: State<AppState>,
+) -> AppResult<Vec<ReadingProgress>> {
+    let conn = lock_conn(&state)?;
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT book_id, chapter_id, chapter_version_id, scroll_top, progress_ratio, updated_at
+            FROM reading_progress
+            WHERE book_id = ?1
+            ORDER BY updated_at DESC
+            "#,
+        )
+        .map_err(db_error)?;
+    let rows = stmt
+        .query_map(params![book_id], map_reading_progress)
+        .map_err(db_error)?;
+    let mut chapter_indexes: HashMap<String, usize> = HashMap::new();
+    let mut progress: Vec<ReadingProgress> = Vec::new();
+    for row in rows {
+        let item = row.map_err(db_error)?;
+        if let Some(index) = chapter_indexes.get(&item.chapter_id).copied() {
+            if is_reading_progress_complete(item.progress_ratio)
+                && !is_reading_progress_complete(progress[index].progress_ratio)
+            {
+                progress[index] = item;
+            }
+        } else {
+            chapter_indexes.insert(item.chapter_id.clone(), progress.len());
+            progress.push(item);
+        }
+    }
+    Ok(progress)
+}
+
+#[tauri::command]
+fn clear_chapter_reading_progress(chapter_id: String, state: State<AppState>) -> AppResult<()> {
+    let conn = lock_conn(&state)?;
+    conn.execute(
+        "DELETE FROM reading_progress WHERE chapter_id = ?1",
+        params![chapter_id],
+    )
+    .map_err(|error| format!("Failed to clear chapter reading progress: {error}"))?;
+    Ok(())
+}
+
+fn normalize_reading_progress_ratio(progress_ratio: f64) -> f64 {
+    let clamped = clamp_f64(progress_ratio, 0.0, READING_PROGRESS_COMPLETE_RATIO);
+    if clamped >= READING_PROGRESS_COMPLETE_THRESHOLD {
+        READING_PROGRESS_COMPLETE_RATIO
+    } else {
+        clamped
+    }
+}
+
+fn is_reading_progress_complete(progress_ratio: f64) -> bool {
+    progress_ratio >= READING_PROGRESS_COMPLETE_THRESHOLD
+}
+
+fn map_reading_progress(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReadingProgress> {
+    Ok(ReadingProgress {
+        book_id: row.get(0)?,
+        chapter_id: row.get(1)?,
+        chapter_version_id: row.get(2)?,
+        scroll_top: row.get(3)?,
+        progress_ratio: row.get(4)?,
+        updated_at: row.get(5)?,
+    })
 }
 
 fn lock_conn<'a, 'b>(
