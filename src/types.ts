@@ -155,6 +155,9 @@ export interface AppSettings {
   homeTableColumns: string;
   homePageSize: number;
   shortcutBindings: string;
+  autoBackupEnabled: boolean;
+  autoBackupIntervalMinutes: number;
+  autoBackupDirectory: string;
 }
 
 export type HomeLibraryView = "grid" | "table";

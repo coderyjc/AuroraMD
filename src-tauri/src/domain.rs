@@ -236,6 +236,9 @@ pub struct AppSettings {
     pub home_table_columns: String,
     pub home_page_size: i64,
     pub shortcut_bindings: String,
+    pub auto_backup_enabled: bool,
+    pub auto_backup_interval_minutes: i64,
+    pub auto_backup_directory: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -285,6 +288,9 @@ pub struct SettingsPatch {
     pub home_table_columns: Option<String>,
     pub home_page_size: Option<i64>,
     pub shortcut_bindings: Option<String>,
+    pub auto_backup_enabled: Option<bool>,
+    pub auto_backup_interval_minutes: Option<i64>,
+    pub auto_backup_directory: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

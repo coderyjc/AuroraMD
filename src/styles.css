@@ -6420,10 +6420,56 @@ body.sorting-drag-active * {
 
 .backup-actions-panel {
   align-items: stretch;
+  margin-top: 28px;
 }
 
 .backup-actions-panel button {
   min-width: 170px;
+}
+
+.auto-backup-panel {
+  display: grid;
+  gap: 12px;
+  margin: 18px 0 20px;
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--paper-strong) 68%, transparent);
+  padding: 12px;
+}
+
+.auto-backup-panel + .backup-actions-panel {
+  margin-top: 20px;
+}
+
+.auto-backup-panel .modal-field {
+  margin-top: 0;
+}
+
+.auto-backup-panel .modal-field small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 520;
+}
+
+.auto-backup-panel input[type="number"] {
+  max-width: 180px;
+}
+
+.auto-backup-location-row {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.auto-backup-location-row input {
+  min-width: min(360px, 100%);
+  flex: 1 1 360px;
+}
+
+.auto-backup-location-row button {
+  min-height: 38px;
+  flex: 0 0 auto;
 }
 
 .about-release-card {

@@ -205,6 +205,18 @@ export async function restoreBackup() {
   return invoke<BackupResult>("restore_backup");
 }
 
+export async function pickAutoBackupDirectory() {
+  return invoke<string | null>("pick_auto_backup_directory");
+}
+
+export async function getDefaultAutoBackupDirectory() {
+  return invoke<string>("get_default_auto_backup_directory");
+}
+
+export async function createAutoBackup(directory?: string | null) {
+  return invoke<BackupResult>("create_auto_backup", { directory });
+}
+
 export async function getSettings() {
   return invoke<AppSettings>("get_settings");
 }

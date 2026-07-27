@@ -700,4 +700,7 @@ export const defaultSettings: AppSettings = {
   homeTableColumns: JSON.stringify(defaultHomeTableColumns),
   homePageSize: 20,
   shortcutBindings: JSON.stringify(defaultShortcutBindings),
+  autoBackupEnabled: false,
+  autoBackupIntervalMinutes: 30,
+  autoBackupDirectory: "",
 };

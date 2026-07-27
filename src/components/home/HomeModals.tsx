@@ -757,11 +757,13 @@ export function HomeSettingsModal({
   closing,
   settings,
   systemFonts,
+  defaultAutoBackupDirectory,
   exportPresets,
   busy,
   onChange,
   onBackupExport,
   onBackupRestore,
+  onChooseAutoBackupDirectory,
   onSaveExportPreset,
   onDeleteExportPreset,
   onOpenRepository,
@@ -770,11 +772,13 @@ export function HomeSettingsModal({
   closing: boolean;
   settings: AppSettings;
   systemFonts: SystemFont[];
+  defaultAutoBackupDirectory: string;
   exportPresets: ExportPreset[];
   busy: boolean;
   onChange: (patch: Partial<AppSettings>) => void;
   onBackupExport: () => void;
   onBackupRestore: () => void;
+  onChooseAutoBackupDirectory: () => void;
   onSaveExportPreset: (
     presetId: string | null,
     payload: ExportPresetPayload,
@@ -877,6 +881,10 @@ export function HomeSettingsModal({
     }
   };
   const tableColumns = parseHomeTableColumns(settings.homeTableColumns);
+  const effectiveAutoBackupDirectory =
+    settings.autoBackupDirectory.trim() ||
+    defaultAutoBackupDirectory ||
+    "应用数据目录\\bakup";
   const setTableColumnVisible = (column: HomeTableColumnKey, visible: boolean) => {
     onChange({
       homeTableColumns: JSON.stringify({
@@ -1375,6 +1383,66 @@ export function HomeSettingsModal({
                   <h3>
                     <Database size={16} /> 数据备份
                   </h3>
+                  <label className="settings-toggle">
+                    <span>
+                      <strong>自动保存</strong>
+                      <small>开启后按固定间隔保存当前数据快照。</small>
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={settings.autoBackupEnabled}
+                      onChange={(event) => onChange({ autoBackupEnabled: event.target.checked })}
+                    />
+                    <i aria-hidden="true" />
+                  </label>
+                  {settings.autoBackupEnabled && (
+                    <div className="auto-backup-panel">
+                      <label className="modal-field">
+                        <span>间隔时间</span>
+                        <input
+                          type="number"
+                          min={5}
+                          max={14400}
+                          step={1}
+                          value={settings.autoBackupIntervalMinutes}
+                          onChange={(event) => {
+                            const value = Number(event.target.value);
+                            if (Number.isFinite(value)) {
+                              onChange({ autoBackupIntervalMinutes: Math.round(value) });
+                            }
+                          }}
+                          onBlur={() =>
+                            onChange({
+                              autoBackupIntervalMinutes: Math.min(
+                                14400,
+                                Math.max(5, Math.round(settings.autoBackupIntervalMinutes || 30)),
+                              ),
+                            })
+                          }
+                        />
+                        <small>单位：分钟，范围 5 到 14400。</small>
+                      </label>
+                      <div className="modal-field">
+                        <span>保存位置</span>
+                        <div className="auto-backup-location-row">
+                          <input value={effectiveAutoBackupDirectory} readOnly />
+                          <button type="button" onClick={onChooseAutoBackupDirectory} disabled={busy}>
+                            <FolderOpen size={15} /> 选择位置
+                          </button>
+                          {settings.autoBackupDirectory.trim() && (
+                            <button
+                              type="button"
+                              onClick={() => onChange({ autoBackupDirectory: "" })}
+                              disabled={busy}
+                            >
+                              使用默认
+                            </button>
+                          )}
+                        </div>
+                        <small>默认保存在数据存储目录的 bakup 文件夹。</small>
+                      </div>
+                    </div>
+                  )}
                   <div className="backup-actions backup-actions-panel">
                     <button onClick={onBackupExport} disabled={busy}>
                       <Download size={16} /> 导出备份

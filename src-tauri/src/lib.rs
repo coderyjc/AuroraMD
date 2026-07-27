@@ -4,6 +4,23 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{Manager, PhysicalPosition, PhysicalSize, State};
+#[cfg(target_os = "windows")]
+use windows::{
+    core::{w, HRESULT, PCWSTR, PWSTR},
+    Win32::{
+        Foundation::ERROR_CANCELLED,
+        System::Com::{
+            CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_INPROC_SERVER,
+            COINIT_APARTMENTTHREADED,
+        },
+        UI::Shell::{
+            Common::COMDLG_FILTERSPEC, FileOpenDialog, FileSaveDialog, IFileDialog,
+            IFileOpenDialog, IFileSaveDialog, IShellItem, SHCreateItemFromParsingName,
+            FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_NOCHANGEDIR, FOS_NOREADONLYRETURN,
+            FOS_OVERWRITEPROMPT, FOS_PATHMUSTEXIST, FOS_PICKFOLDERS, SIGDN_FILESYSPATH,
+        },
+    },
+};
 
 mod db;
 mod domain;
@@ -22,6 +39,7 @@ use utils::{
 struct AppState {
     conn: Mutex<Connection>,
     db_path: PathBuf,
+    app_data_dir: PathBuf,
 }
 
 const INITIAL_WINDOW_WIDTH_RATIO: f64 = 0.69;
@@ -45,6 +63,7 @@ pub fn run() {
             app.manage(AppState {
                 conn: Mutex::new(conn),
                 db_path,
+                app_data_dir,
             });
             Ok(())
         })
@@ -90,6 +109,9 @@ pub fn run() {
             export_annotations,
             export_backup,
             restore_backup,
+            pick_auto_backup_directory,
+            get_default_auto_backup_directory,
+            create_auto_backup,
             get_settings,
             update_settings,
             list_system_fonts,
@@ -375,35 +397,8 @@ fn pick_backup_save_path() -> AppResult<Option<PathBuf>> {
             .take(14)
             .collect::<String>();
         let default_name = format!("auroramd-backup-{timestamp}.sqlite3");
-        let script = format!(
-            r#"
-Add-Type -AssemblyName System.Windows.Forms
-$dialog = New-Object System.Windows.Forms.SaveFileDialog
-$dialog.Title = 'Export AuroraMD backup'
-$dialog.Filter = 'SQLite backup (*.sqlite3)|*.sqlite3|All files (*.*)|*.*'
-$dialog.FileName = '{}'
-if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
-  [Console]::Out.Write($dialog.FileName)
-}}
-"#,
-            default_name.replace('\'', "''")
-        );
-        let output = std::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-STA", "-Command", &script])
-            .output()
-            .map_err(|error| format!("Failed to open backup save dialog: {error}"))?;
-        if !output.status.success() {
-            return Err(format!(
-                "Backup save dialog failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-        let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if selected.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(PathBuf::from(selected)))
-        }
+        pick_windows_save_file("Export AuroraMD backup", &default_name)
+            .map_err(|error| format!("Failed to open backup save dialog: {error}"))
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -415,37 +410,268 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
 fn pick_backup_open_path() -> AppResult<Option<PathBuf>> {
     #[cfg(target_os = "windows")]
     {
-        let script = r#"
-Add-Type -AssemblyName System.Windows.Forms
-$dialog = New-Object System.Windows.Forms.OpenFileDialog
-$dialog.Title = 'Restore AuroraMD backup'
-$dialog.Filter = 'SQLite backup (*.sqlite3)|*.sqlite3|All files (*.*)|*.*'
-if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-  [Console]::Out.Write($dialog.FileName)
-}
-"#;
-        let output = std::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-STA", "-Command", script])
-            .output()
-            .map_err(|error| format!("Failed to open backup file dialog: {error}"))?;
-        if !output.status.success() {
-            return Err(format!(
-                "Backup file dialog failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-        let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if selected.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(PathBuf::from(selected)))
-        }
+        pick_windows_open_file("Restore AuroraMD backup")
+            .map_err(|error| format!("Failed to open backup file dialog: {error}"))
     }
 
     #[cfg(not(target_os = "windows"))]
     {
         Ok(None)
     }
+}
+
+fn pick_auto_backup_directory_path() -> AppResult<Option<PathBuf>> {
+    #[cfg(target_os = "windows")]
+    {
+        pick_windows_folder("Select AuroraMD automatic backup folder", None)
+            .map_err(|error| format!("Failed to open auto backup folder picker: {error}"))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(None)
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct WindowsComGuard;
+
+#[cfg(target_os = "windows")]
+impl Drop for WindowsComGuard {
+    fn drop(&mut self) {
+        unsafe {
+            CoUninitialize();
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn init_windows_dialog_com() -> AppResult<WindowsComGuard> {
+    unsafe {
+        CoInitializeEx(None, COINIT_APARTMENTTHREADED)
+            .ok()
+            .map_err(|error| format!("Failed to initialize Windows dialog: {error}"))?;
+    }
+    Ok(WindowsComGuard)
+}
+
+#[cfg(target_os = "windows")]
+fn pick_windows_save_file(title: &str, default_name: &str) -> AppResult<Option<PathBuf>> {
+    let title = title.to_string();
+    let default_name = default_name.to_string();
+    std::thread::spawn(move || pick_windows_save_file_on_sta(&title, &default_name))
+        .join()
+        .map_err(|_| "Windows save dialog thread panicked.".to_string())?
+}
+
+#[cfg(target_os = "windows")]
+fn pick_windows_save_file_on_sta(title: &str, default_name: &str) -> AppResult<Option<PathBuf>> {
+    unsafe {
+        let _com_guard = init_windows_dialog_com()?;
+        let dialog: IFileSaveDialog = CoCreateInstance(&FileSaveDialog, None, CLSCTX_INPROC_SERVER)
+            .map_err(|error| format!("Failed to create Windows save dialog: {error}"))?;
+        let options = dialog
+            .GetOptions()
+            .map_err(|error| format!("Failed to read Windows save dialog options: {error}"))?;
+        dialog
+            .SetOptions(
+                options
+                    | FOS_FORCEFILESYSTEM
+                    | FOS_PATHMUSTEXIST
+                    | FOS_NOCHANGEDIR
+                    | FOS_OVERWRITEPROMPT
+                    | FOS_NOREADONLYRETURN,
+            )
+            .map_err(|error| format!("Failed to configure Windows save dialog: {error}"))?;
+        configure_backup_file_dialog(&dialog, title)?;
+        let default_name_wide = str_to_wide_null(default_name);
+        dialog
+            .SetFileName(PCWSTR(default_name_wide.as_ptr()))
+            .map_err(|error| format!("Failed to set backup file name: {error}"))?;
+        dialog
+            .SetDefaultExtension(w!("sqlite3"))
+            .map_err(|error| format!("Failed to set backup file extension: {error}"))?;
+
+        if let Err(error) = dialog.Show(None) {
+            if error.code() == HRESULT::from_win32(ERROR_CANCELLED.0) {
+                return Ok(None);
+            }
+            return Err(format!("Windows save dialog failed: {error}"));
+        }
+
+        let result = dialog
+            .GetResult()
+            .map_err(|error| format!("Failed to read selected backup file: {error}"))?;
+        shell_item_to_path(&result, "selected backup file")
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn pick_windows_open_file(title: &str) -> AppResult<Option<PathBuf>> {
+    let title = title.to_string();
+    std::thread::spawn(move || pick_windows_open_file_on_sta(&title))
+        .join()
+        .map_err(|_| "Windows open dialog thread panicked.".to_string())?
+}
+
+#[cfg(target_os = "windows")]
+fn pick_windows_open_file_on_sta(title: &str) -> AppResult<Option<PathBuf>> {
+    unsafe {
+        let _com_guard = init_windows_dialog_com()?;
+        let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)
+            .map_err(|error| format!("Failed to create Windows open dialog: {error}"))?;
+        let options = dialog
+            .GetOptions()
+            .map_err(|error| format!("Failed to read Windows open dialog options: {error}"))?;
+        dialog
+            .SetOptions(
+                options
+                    | FOS_FORCEFILESYSTEM
+                    | FOS_FILEMUSTEXIST
+                    | FOS_PATHMUSTEXIST
+                    | FOS_NOCHANGEDIR,
+            )
+            .map_err(|error| format!("Failed to configure Windows open dialog: {error}"))?;
+        configure_backup_file_dialog(&dialog, title)?;
+
+        if let Err(error) = dialog.Show(None) {
+            if error.code() == HRESULT::from_win32(ERROR_CANCELLED.0) {
+                return Ok(None);
+            }
+            return Err(format!("Windows open dialog failed: {error}"));
+        }
+
+        let result = dialog
+            .GetResult()
+            .map_err(|error| format!("Failed to read selected backup file: {error}"))?;
+        shell_item_to_path(&result, "selected backup file")
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn configure_backup_file_dialog(dialog: &IFileDialog, title: &str) -> AppResult<()> {
+    unsafe {
+        let filters = [
+            COMDLG_FILTERSPEC {
+                pszName: w!("SQLite backup (*.sqlite3)"),
+                pszSpec: w!("*.sqlite3"),
+            },
+            COMDLG_FILTERSPEC {
+                pszName: w!("All files (*.*)"),
+                pszSpec: w!("*.*"),
+            },
+        ];
+        dialog
+            .SetFileTypes(&filters)
+            .map_err(|error| format!("Failed to set backup file filters: {error}"))?;
+        dialog
+            .SetFileTypeIndex(1)
+            .map_err(|error| format!("Failed to set backup file filter: {error}"))?;
+        let title_wide = str_to_wide_null(title);
+        dialog
+            .SetTitle(PCWSTR(title_wide.as_ptr()))
+            .map_err(|error| format!("Failed to set Windows dialog title: {error}"))?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn pick_windows_folder(
+    title: &str,
+    initial_directory: Option<&Path>,
+) -> AppResult<Option<PathBuf>> {
+    let title = title.to_string();
+    let initial_directory = initial_directory.map(Path::to_path_buf);
+    std::thread::spawn(move || pick_windows_folder_on_sta(&title, initial_directory.as_deref()))
+        .join()
+        .map_err(|_| "Windows folder dialog thread panicked.".to_string())?
+}
+
+#[cfg(target_os = "windows")]
+fn pick_windows_folder_on_sta(
+    title: &str,
+    initial_directory: Option<&Path>,
+) -> AppResult<Option<PathBuf>> {
+    unsafe {
+        let _com_guard = init_windows_dialog_com()?;
+        let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)
+            .map_err(|error| format!("Failed to create Windows folder dialog: {error}"))?;
+        let options = dialog
+            .GetOptions()
+            .map_err(|error| format!("Failed to read Windows folder dialog options: {error}"))?;
+        dialog
+            .SetOptions(
+                options
+                    | FOS_PICKFOLDERS
+                    | FOS_FORCEFILESYSTEM
+                    | FOS_PATHMUSTEXIST
+                    | FOS_NOCHANGEDIR,
+            )
+            .map_err(|error| format!("Failed to configure Windows folder dialog: {error}"))?;
+        let title_wide = str_to_wide_null(title);
+        dialog
+            .SetTitle(PCWSTR(title_wide.as_ptr()))
+            .map_err(|error| format!("Failed to set Windows folder dialog title: {error}"))?;
+
+        if let Some(initial_directory) = initial_directory.filter(|path| path.exists()) {
+            let wide_path = path_to_wide_null(initial_directory);
+            let shell_item: IShellItem =
+                SHCreateItemFromParsingName(PCWSTR(wide_path.as_ptr()), None)
+                    .map_err(|error| format!("Failed to open initial folder: {error}"))?;
+            dialog
+                .SetFolder(&shell_item)
+                .map_err(|error| format!("Failed to set initial folder: {error}"))?;
+        }
+
+        if let Err(error) = dialog.Show(None) {
+            if error.code() == HRESULT::from_win32(ERROR_CANCELLED.0) {
+                return Ok(None);
+            }
+            return Err(format!("Windows folder dialog failed: {error}"));
+        }
+
+        let result = dialog
+            .GetResult()
+            .map_err(|error| format!("Failed to read selected folder: {error}"))?;
+        shell_item_to_path(&result, "selected folder")
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn shell_item_to_path(item: &IShellItem, label: &str) -> AppResult<Option<PathBuf>> {
+    unsafe {
+        let selected_path = item
+            .GetDisplayName(SIGDN_FILESYSPATH)
+            .map_err(|error| format!("Failed to read {label} path: {error}"))?;
+        let selected = pwstr_to_string_and_free(selected_path)
+            .map_err(|error| format!("Failed to decode {label} path: {error}"))?;
+        Ok(Some(PathBuf::from(selected)))
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn path_to_wide_null(path: &Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+
+    path.as_os_str().encode_wide().chain(Some(0)).collect()
+}
+
+#[cfg(target_os = "windows")]
+fn str_to_wide_null(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(Some(0)).collect()
+}
+
+#[cfg(target_os = "windows")]
+fn pwstr_to_string_and_free(value: PWSTR) -> Result<String, std::string::FromUtf16Error> {
+    unsafe {
+        let result = value.to_string();
+        CoTaskMemFree(Some(value.as_ptr().cast()));
+        result
+    }
+}
+
+fn default_auto_backup_dir(state: &AppState) -> PathBuf {
+    state.app_data_dir.join("bakup")
 }
 
 #[tauri::command]
@@ -1802,17 +2028,50 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
     } else {
         Ok(())
     };
-    let home_page_size_restore_result = if restore_result.is_ok()
-        && backup_has_column(&conn, "settings", "home_page_size")?
-    {
-        conn.execute_batch(
-            r#"
+    let home_page_size_restore_result =
+        if restore_result.is_ok() && backup_has_column(&conn, "settings", "home_page_size")? {
+            conn.execute_batch(
+                r#"
             UPDATE settings
             SET home_page_size = (
                 SELECT home_page_size
                 FROM backup.settings
                 WHERE backup.settings.id = settings.id
             )
+            WHERE EXISTS (
+                SELECT 1
+                FROM backup.settings
+                WHERE backup.settings.id = settings.id
+            );
+            "#,
+            )
+        } else {
+            Ok(())
+        };
+    let auto_backup_restore_result = if restore_result.is_ok()
+        && backup_has_column(&conn, "settings", "auto_backup_enabled")?
+        && backup_has_column(&conn, "settings", "auto_backup_interval_minutes")?
+        && backup_has_column(&conn, "settings", "auto_backup_directory")?
+    {
+        conn.execute_batch(
+            r#"
+            UPDATE settings
+            SET
+                auto_backup_enabled = (
+                    SELECT auto_backup_enabled
+                    FROM backup.settings
+                    WHERE backup.settings.id = settings.id
+                ),
+                auto_backup_interval_minutes = (
+                    SELECT auto_backup_interval_minutes
+                    FROM backup.settings
+                    WHERE backup.settings.id = settings.id
+                ),
+                auto_backup_directory = (
+                    SELECT auto_backup_directory
+                    FROM backup.settings
+                    WHERE backup.settings.id = settings.id
+                )
             WHERE EXISTS (
                 SELECT 1
                 FROM backup.settings
@@ -2019,6 +2278,8 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
         .map_err(|error| format!("Failed to restore home view settings: {error}"))?;
     home_page_size_restore_result
         .map_err(|error| format!("Failed to restore home page size setting: {error}"))?;
+    auto_backup_restore_result
+        .map_err(|error| format!("Failed to restore auto backup settings: {error}"))?;
     split_font_restore_result
         .map_err(|error| format!("Failed to restore font settings: {error}"))?;
     pinned_restore_result.map_err(|error| format!("Failed to restore pinned books: {error}"))?;
@@ -2031,6 +2292,55 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
 
     Ok(BackupResult {
         path: path_to_string(&source_path),
+    })
+}
+
+#[tauri::command]
+fn pick_auto_backup_directory() -> AppResult<Option<String>> {
+    Ok(pick_auto_backup_directory_path()?.map(|path| path_to_string(&path)))
+}
+
+#[tauri::command]
+fn get_default_auto_backup_directory(state: State<AppState>) -> AppResult<String> {
+    Ok(path_to_string(&default_auto_backup_dir(&state)))
+}
+
+#[tauri::command]
+fn create_auto_backup(
+    directory: Option<String>,
+    state: State<AppState>,
+) -> AppResult<BackupResult> {
+    let target_dir = directory
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| default_auto_backup_dir(&state));
+    if target_dir.exists() && !target_dir.is_dir() {
+        return Err("Auto backup path must be a folder.".to_string());
+    }
+    fs::create_dir_all(&target_dir)
+        .map_err(|error| format!("Failed to create auto backup folder: {error}"))?;
+
+    let timestamp = now()
+        .chars()
+        .filter(|char| char.is_ascii_digit())
+        .take(14)
+        .collect::<String>();
+    let target_path = target_dir.join(format!("auroramd-snapshot-{timestamp}.sqlite3"));
+    if target_path == state.db_path {
+        return Err("Backup path cannot be the active database file.".to_string());
+    }
+    if target_path.exists() {
+        fs::remove_file(&target_path)
+            .map_err(|error| format!("Failed to replace existing auto backup file: {error}"))?;
+    }
+
+    let conn = lock_conn(&state)?;
+    conn.execute("VACUUM main INTO ?1", params![path_to_string(&target_path)])
+        .map_err(|error| format!("Failed to create auto backup: {error}"))?;
+    Ok(BackupResult {
+        path: path_to_string(&target_path),
     })
 }
 
@@ -2074,6 +2384,15 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
             "serif",
         )
     });
+    let next_auto_backup_interval_minutes = patch
+        .auto_backup_interval_minutes
+        .unwrap_or(current.auto_backup_interval_minutes)
+        .clamp(5, 14400);
+    let next_auto_backup_directory = patch
+        .auto_backup_directory
+        .unwrap_or(current.auto_backup_directory)
+        .trim()
+        .to_string();
     conn.execute(
         r#"
         UPDATE settings
@@ -2100,7 +2419,10 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
             home_default_view = ?19,
             home_table_columns = ?20,
             home_page_size = ?21,
-            shortcut_bindings = ?22
+            shortcut_bindings = ?22,
+            auto_backup_enabled = ?23,
+            auto_backup_interval_minutes = ?24,
+            auto_backup_directory = ?25
         WHERE id = 1
         "#,
         params![
@@ -2124,14 +2446,17 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
             patch.border_style.unwrap_or(current.border_style),
             patch.focus_mode.unwrap_or(current.focus_mode),
             patch.slide_annotate.unwrap_or(current.slide_annotate),
-            patch
-                .home_default_view
-                .unwrap_or(current.home_default_view),
+            patch.home_default_view.unwrap_or(current.home_default_view),
             patch
                 .home_table_columns
                 .unwrap_or(current.home_table_columns),
             patch.home_page_size.unwrap_or(current.home_page_size),
-            patch.shortcut_bindings.unwrap_or(current.shortcut_bindings)
+            patch.shortcut_bindings.unwrap_or(current.shortcut_bindings),
+            patch
+                .auto_backup_enabled
+                .unwrap_or(current.auto_backup_enabled),
+            next_auto_backup_interval_minutes,
+            next_auto_backup_directory
         ],
     )
     .map_err(|error| format!("Failed to update settings: {error}"))?;
@@ -3040,7 +3365,10 @@ fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
             home_default_view,
             home_table_columns,
             home_page_size,
-            shortcut_bindings
+            shortcut_bindings,
+            auto_backup_enabled,
+            auto_backup_interval_minutes,
+            auto_backup_directory
         FROM settings
         WHERE id = 1
         "#,
@@ -3069,6 +3397,9 @@ fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
                 home_table_columns: row.get(19)?,
                 home_page_size: row.get(20)?,
                 shortcut_bindings: row.get(21)?,
+                auto_backup_enabled: row.get(22)?,
+                auto_backup_interval_minutes: row.get(23)?,
+                auto_backup_directory: row.get(24)?,
             })
         },
     )

@@ -38,6 +38,7 @@ import {
 } from "react";
 import {
   createAnnotation,
+  createAutoBackup,
   createExportPreset,
   deleteAnnotation,
   deleteBook,
@@ -47,6 +48,7 @@ import {
   exportBackup,
   getLatestReadingProgress,
   getSettings,
+  getDefaultAutoBackupDirectory,
   importBookSelection,
   listLaunchMarkdownPaths,
   listBooks,
@@ -61,6 +63,7 @@ import {
   openMarkdownFile,
   openProjectRepository,
   pickBookFolder,
+  pickAutoBackupDirectory,
   pickMarkdownFiles,
   previewImportBookFolder,
   readChapter,
@@ -462,6 +465,7 @@ export default function App() {
   const [reader, setReader] = useState<ReadChapterResponse | null>(null);
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
   const [systemFonts, setSystemFonts] = useState<SystemFont[]>([]);
+  const [defaultAutoBackupDirectory, setDefaultAutoBackupDirectory] = useState("");
   const [homeSettingsOpen, setHomeSettingsOpen] = useState(false);
   const [homeSettingsClosing, setHomeSettingsClosing] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -579,6 +583,7 @@ export default function App() {
   } | null>(null);
   const imagePreviewDidDragRef = useRef(false);
   const latestSettingsRef = useRef<AppSettings>(defaultSettings);
+  const autoBackupInFlightRef = useRef(false);
   const searchThemeSnapshotRef = useRef<Pick<AppSettings, "themeSeries" | "theme"> | null>(null);
 
   latestSettingsRef.current = settings;
@@ -1377,6 +1382,41 @@ export default function App() {
   }, [homePageSize]);
 
   useEffect(() => {
+    if (!settings.autoBackupEnabled) return;
+    const requestedInterval = Number(settings.autoBackupIntervalMinutes);
+    const intervalMinutes = Math.round(
+      clamp(
+        Number.isFinite(requestedInterval)
+          ? requestedInterval
+          : defaultSettings.autoBackupIntervalMinutes,
+        5,
+        14400,
+      ),
+    );
+    const intervalMs = intervalMinutes * 60 * 1000;
+    const runAutoBackup = async () => {
+      if (autoBackupInFlightRef.current) return;
+      autoBackupInFlightRef.current = true;
+      try {
+        const result = await createAutoBackup(settings.autoBackupDirectory || null);
+        setNotice(`自动备份已保存：${result.path}`);
+      } catch (err) {
+        setError(readError(err));
+      } finally {
+        autoBackupInFlightRef.current = false;
+      }
+    };
+    const intervalId = window.setInterval(() => {
+      void runAutoBackup();
+    }, intervalMs);
+    return () => window.clearInterval(intervalId);
+  }, [
+    settings.autoBackupDirectory,
+    settings.autoBackupEnabled,
+    settings.autoBackupIntervalMinutes,
+  ]);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && closeTopModal()) {
         event.preventDefault();
@@ -1504,6 +1544,7 @@ export default function App() {
         nextNotes,
         nextExportPresets,
         nextSystemFonts,
+        nextDefaultAutoBackupDirectory,
         launchMarkdownPaths,
       ] = await Promise.all([
         listBooks(),
@@ -1511,6 +1552,7 @@ export default function App() {
         listNoteItems(),
         listExportPresets(),
         listSystemFonts().catch(() => []),
+        getDefaultAutoBackupDirectory().catch(() => ""),
         listLaunchMarkdownPaths().catch(() => []),
       ]);
       setBooks(nextBooks);
@@ -1519,6 +1561,7 @@ export default function App() {
       setNotes(nextNotes);
       setExportPresets(nextExportPresets);
       setSystemFonts(nextSystemFonts);
+      setDefaultAutoBackupDirectory(nextDefaultAutoBackupDirectory);
       if (launchMarkdownPaths[0]) {
         await openLaunchMarkdownFile(launchMarkdownPaths[0], launchMarkdownPaths.length);
       }
@@ -2900,6 +2943,16 @@ export default function App() {
     }
   }
 
+  async function chooseAutoBackupDirectory() {
+    setError("");
+    try {
+      const selected = await pickAutoBackupDirectory();
+      if (selected) applySettings({ autoBackupDirectory: selected });
+    } catch (err) {
+      setError(readError(err));
+    }
+  }
+
   function openSearchModal() {
     const latestSettings = latestSettingsRef.current;
     searchThemeSnapshotRef.current = {
@@ -3830,10 +3883,12 @@ export default function App() {
             closing={homeSettingsClosing}
             settings={settings}
             systemFonts={systemFonts}
+            defaultAutoBackupDirectory={defaultAutoBackupDirectory}
             exportPresets={exportPresets}
             busy={busy}
             onBackupExport={() => void runBackupExport()}
             onBackupRestore={() => void runBackupRestore()}
+            onChooseAutoBackupDirectory={() => void chooseAutoBackupDirectory()}
             onChange={applySettings}
             onSaveExportPreset={saveExportPreset}
             onDeleteExportPreset={removeExportPreset}
@@ -4384,6 +4439,7 @@ function translateErrorMessage(message: string) {
       "当前章节版本不能删除，请先切换或创建另一个当前版本。",
     "Preset name cannot be empty.": "预设名称不能为空。",
     "Backup path cannot be the active database file.": "备份路径不能是当前正在使用的数据库文件。",
+    "Auto backup path must be a folder.": "自动备份路径必须是文件夹。",
     "Database lock is poisoned.": "数据库锁状态异常，请重启应用后再试。",
     "Unknown annotation status.": "未知的批注状态。",
     "Unknown export template.": "未知的导出模板。",
@@ -4397,6 +4453,11 @@ function translateErrorMessage(message: string) {
     ["Backup save dialog failed:", "备份保存窗口失败："],
     ["Failed to open backup file dialog:", "打开备份文件窗口失败："],
     ["Backup file dialog failed:", "备份文件窗口失败："],
+    ["Failed to open auto backup folder picker:", "打开自动备份文件夹选择器失败："],
+    ["Auto backup folder picker failed:", "自动备份文件夹选择器失败："],
+    ["Failed to create auto backup folder:", "创建自动备份文件夹失败："],
+    ["Failed to replace existing auto backup file:", "替换已有自动备份文件失败："],
+    ["Failed to create auto backup:", "创建自动备份失败："],
     ["Failed to resolve folder path:", "解析文件夹路径失败："],
     ["Failed to read book folder:", "读取书籍文件夹失败："],
     ["Failed to read folder entry:", "读取文件夹条目失败："],
@@ -4425,6 +4486,7 @@ function translateErrorMessage(message: string) {
     ["Failed to restore pinned books:", "恢复置顶书籍失败："],
     ["Failed to restore pinned annotations:", "恢复置顶批注失败："],
     ["Failed to restore export presets:", "恢复导出预设失败："],
+    ["Failed to restore auto backup settings:", "恢复自动备份设置失败："],
     ["Failed to update settings:", "更新设置失败："],
     ["Failed to save reading progress:", "保存阅读进度失败："],
     ["Failed to start import transaction:", "启动导入事务失败："],
