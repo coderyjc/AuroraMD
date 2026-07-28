@@ -8,10 +8,10 @@ AuroraMD 是一个本地优先的 Markdown 桌面阅读器，用来阅读按章�
 
 如果重开 Codex 会话，请先读本节和下面的“开发踩坑记录”。当前项目状态以本 README 为准。
 
-- 当前版本：`v0.5.2`。
+- 当前版本：`v0.5.3`。
 - 当前工作区：`E:\code\github\annotaloop`。
 - 用户验证入口：`src-tauri/target/release/auroramd.exe`。完成功能或修复后，默认直接执行 `npm.cmd run tauri -- build`，不要只停在前端构建或 dev server。
-- 最近一次 release 构建输出为 `src-tauri/target/release/auroramd.exe` 和 `src-tauri/target/release/bundle/nsis/AuroraMD_0.5.2_x64-setup.exe`。
+- 最近一次 release 构建输出为 `src-tauri/target/release/auroramd.exe` 和 `src-tauri/target/release/bundle/nsis/AuroraMD_0.5.3_x64-setup.exe`。
 - 目前窗口已改为 Tauri 无原生装饰窗口：`src-tauri/tauri.conf.json` 中 `decorations` 为 `false`，应用内标题栏在 `src/App.tsx` 的 `AppTitlebar` 和 `src/styles.css` 的 `.desktop-titlebar`。
 - 主窗口首次启动居中，后续会从 `localStorage` 的 `auroramd.windowPlacement.v1` 恢复窗口位置和大小；旧的 `annotaloop.windowPlacement.v1` 会被兼容读取一次并迁移。Tauri 权限需要保留 `core:window:allow-set-position` 和 `core:window:allow-set-size`。
 - 阅读器全屏阅读通过 Tauri `setFullscreen` 实现，顶部/左右栏通过 `.fullscreen-edge-*` 热区唤出；顶部栏还用 `cursorPosition()` 和 `outerPosition()` 做快速贴边轮询补偿，避免鼠标高速移动到屏幕顶端时漏触发。
@@ -169,7 +169,7 @@ npm.cmd run tauri -- build
 
 ```text
 src-tauri/target/release/auroramd.exe
-src-tauri/target/release/bundle/nsis/AuroraMD_0.5.2_x64-setup.exe
+src-tauri/target/release/bundle/nsis/AuroraMD_0.5.3_x64-setup.exe
 ```
 
 ## 数据存储
@@ -260,12 +260,12 @@ src-tauri/target/release/auroramd.exe
   2. `cargo check`（在 `src-tauri/` 下）
   3. `cargo test`（在 `src-tauri/` 下）
   4. `npm.cmd run tauri -- build`
-- 当前 v0.5.2 首页表格视图、分页、阅读器高亮变更、设置分栏、字体拆分和界面文本禁选更新后已通过：
+- 当前 v0.5.3 首页表格视图、分页、阅读器高亮变更、设置分栏、字体拆分和界面文本禁选更新后已通过：
   - `npm.cmd run build`
   - `npm.cmd run tauri -- build`
-- 最近一次 v0.5.2 release 构建输出：
+- 最近一次 v0.5.3 release 构建输出：
   - `src-tauri/target/release/auroramd.exe`
-  - `src-tauri/target/release/bundle/nsis/AuroraMD_0.5.2_x64-setup.exe`
+  - `src-tauri/target/release/bundle/nsis/AuroraMD_0.5.3_x64-setup.exe`
 - 最近一次自定义标题栏更新后已通过：
   - `npm.cmd run build`
   - `npm.cmd run tauri -- build`
@@ -281,7 +281,7 @@ src-tauri/target/release/auroramd.exe
 - Windows 安装包输出位置通常是：
 
 ```text
-src-tauri/target/release/bundle/nsis/AuroraMD_0.5.2_x64-setup.exe
+src-tauri/target/release/bundle/nsis/AuroraMD_0.5.3_x64-setup.exe
 ```
 - 如果 `cargo check` 或 Tauri 打包时报错，提示去读取另一个旧目录下的 `target/.../permissions/...app_hide.toml`，通常是 Tauri/Rust 构建缓存里残留了旧绝对路径。排查时可以临时使用独立 target 目录：
 
@@ -292,7 +292,7 @@ cargo check
 
 清理临时目录前先确认路径仍在当前工作区内，必要时把只读属性归一化后再删，避免误删工作区外文件或被 Windows 文件属性拦住。
 
-## v0.5.2 功能摘要
+## v0.5.3 功能摘要
 
 - 首页新增表格视图，一行一本书展示多选框、行号、标题、章节数量、批注数量、上传时间和上次打开时间；支持表头拖拽列宽、点击排序、右键菜单、拖拽导入和批量删除。
 - 首页 Gallery、表格视图和批注页面新增分页；分页数量可在设置-外观中选择 10/20/30/40，项目数量不足时自动隐藏分页组件。

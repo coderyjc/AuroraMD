@@ -24,12 +24,12 @@ AuroraMD 是一个颜值优先的本地 Markdown 阅读器。它把书架、阅�
 
 Windows 用户可以在 [Releases](https://github.com/coderyjc/AuroraMD/releases) 页面下载安装包。
 
-当前版本：`v0.5.2`
+当前版本：`v0.5.3`
 
 常见构建产物名称：
 
 ```text
-AuroraMD_0.5.2_x64-setup.exe
+AuroraMD_0.5.3_x64-setup.exe
 ```
 
 ## 使用方式
@@ -111,7 +111,7 @@ npm.cmd run tauri -- build
 
 ```text
 src-tauri/target/release/auroramd.exe
-src-tauri/target/release/bundle/nsis/AuroraMD_0.5.2_x64-setup.exe
+src-tauri/target/release/bundle/nsis/AuroraMD_0.5.3_x64-setup.exe
 ```
 
 ## 数据存储
