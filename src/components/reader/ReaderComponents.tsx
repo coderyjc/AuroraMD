@@ -17,7 +17,16 @@ import { type MouseEvent as ReactMouseEvent, useEffect, useRef, useState } from 
 
 import { FontPicker } from "../FontPicker";
 import { highlightColors } from "../../constants";
-import type { Annotation, AppSettings, Chapter, ExportPreset, ExportTaskGoal, ExportTemplate, SystemFont } from "../../types";
+import type {
+  Annotation,
+  AppSettings,
+  Chapter,
+  ChapterVersion,
+  ExportPreset,
+  ExportTaskGoal,
+  ExportTemplate,
+  SystemFont,
+} from "../../types";
 import { chapterFileName } from "../../utils/chapters";
 
 export interface SelectionDraft {
@@ -562,20 +571,28 @@ export function SettingsPanel({
   closing,
   settings,
   systemFonts,
+  currentVersionId,
+  currentChapterVersionId,
+  versions,
   showChangeHighlights,
   changeHighlightBusy,
   hasPreviousVersion,
   onChange,
+  onVersionChange,
   onChangeHighlightToggle,
   onClose,
 }: {
   closing: boolean;
   settings: AppSettings;
   systemFonts: SystemFont[];
+  currentVersionId: string | null;
+  currentChapterVersionId: string | null;
+  versions: ChapterVersion[];
   showChangeHighlights: boolean;
   changeHighlightBusy: boolean;
   hasPreviousVersion: boolean;
   onChange: (patch: Partial<AppSettings>) => void;
+  onVersionChange: (chapterVersionId: string) => void;
   onChangeHighlightToggle: (enabled: boolean) => void;
   onClose: () => void;
 }) {
@@ -599,11 +616,30 @@ export function SettingsPanel({
           </button>
         </header>
 
+        <label className="reader-version-setting">
+          <span>
+            <strong>当前版本</strong>
+          </span>
+          <select
+            value={currentVersionId ?? ""}
+            onChange={(event) => onVersionChange(event.target.value)}
+            disabled={!versions.length}
+          >
+            {versions.map((version) => (
+              <option key={version.id} value={version.id}>
+                {version.id === currentChapterVersionId
+                  ? `当前版本 v${version.versionNumber}`
+                  : `v${version.versionNumber}`}
+              </option>
+            ))}
+          </select>
+        </label>
+
         <div className="settings-toggle-grid">
           <label className="settings-toggle">
             <span>
               <strong>聚焦模式</strong>
-              <small>悬浮正文时，仅当前段落与相邻段落保持清晰。</small>
+              <small>仅当前段落与相邻段落保持清晰。</small>
             </span>
             <input
               type="checkbox"
@@ -631,65 +667,73 @@ export function SettingsPanel({
           </label>
         </div>
 
-        <div className="reader-font-setting-grid">
-          <FontPicker
-            label="阅读器英文字体"
-            description="只改变阅读器正文中的英文和数字。"
-            value={settings.readerLatinFontFamily}
-            fallbackGeneric="serif"
-            systemFonts={systemFonts}
-            onChange={(value) => onChange({ readerLatinFontFamily: value })}
-          />
-          <FontPicker
-            label="阅读器中文字体"
-            description="只改变阅读器正文中的中文内容。"
-            value={settings.readerCjkFontFamily}
-            fallbackGeneric="serif"
-            systemFonts={systemFonts}
-            onChange={(value) => onChange({ readerCjkFontFamily: value })}
-          />
-        </div>
+        <section className="settings-group">
+          <h3>字体设置</h3>
+          <div className="reader-font-setting-grid">
+            <FontPicker
+              label="阅读器英文字体"
+              description="只改变阅读器正文中的英文和数字。"
+              value={settings.readerLatinFontFamily}
+              fallbackGeneric="serif"
+              systemFonts={systemFonts}
+              onChange={(value) => onChange({ readerLatinFontFamily: value })}
+            />
+            <FontPicker
+              label="阅读器中文字体"
+              description="只改变阅读器正文中的中文内容。"
+              value={settings.readerCjkFontFamily}
+              fallbackGeneric="serif"
+              systemFonts={systemFonts}
+              onChange={(value) => onChange({ readerCjkFontFamily: value })}
+            />
+          </div>
+        </section>
 
-        <RangeControl
-          label="字号"
-          min={14}
-          max={24}
-          step={1}
-          value={settings.fontSize}
-          onChange={(value) => onChange({ fontSize: value })}
-        />
-        <RangeControl
-          label="行距"
-          min={1.35}
-          max={2.1}
-          step={0.05}
-          value={settings.lineHeight}
-          onChange={(value) => onChange({ lineHeight: value })}
-        />
-        <RangeControl
-          label="正文宽度"
-          min={620}
-          max={1040}
-          step={20}
-          value={settings.contentWidth}
-          onChange={(value) => onChange({ contentWidth: value })}
-        />
-        <RangeControl
-          label="页边距"
-          min={24}
-          max={88}
-          step={4}
-          value={settings.pagePadding}
-          onChange={(value) => onChange({ pagePadding: value })}
-        />
-        <RangeControl
-          label="段落间距"
-          min={8}
-          max={30}
-          step={1}
-          value={settings.paragraphSpacing}
-          onChange={(value) => onChange({ paragraphSpacing: value })}
-        />
+        <section className="settings-group">
+          <h3>页面设置</h3>
+          <div className="settings-control-stack">
+            <RangeControl
+              label="字号"
+              min={14}
+              max={24}
+              step={1}
+              value={settings.fontSize}
+              onChange={(value) => onChange({ fontSize: value })}
+            />
+            <RangeControl
+              label="行距"
+              min={1.35}
+              max={2.1}
+              step={0.05}
+              value={settings.lineHeight}
+              onChange={(value) => onChange({ lineHeight: value })}
+            />
+            <RangeControl
+              label="正文宽度"
+              min={620}
+              max={1040}
+              step={20}
+              value={settings.contentWidth}
+              onChange={(value) => onChange({ contentWidth: value })}
+            />
+            <RangeControl
+              label="页边距"
+              min={24}
+              max={88}
+              step={4}
+              value={settings.pagePadding}
+              onChange={(value) => onChange({ pagePadding: value })}
+            />
+            <RangeControl
+              label="段落间距"
+              min={8}
+              max={30}
+              step={1}
+              value={settings.paragraphSpacing}
+              onChange={(value) => onChange({ paragraphSpacing: value })}
+            />
+          </div>
+        </section>
 
         <label>
           边框

@@ -7450,6 +7450,13 @@ body.version-sidebar-resize-active * {
   color: var(--accent);
 }
 
+.settings-panel h3 {
+  margin: 0 0 10px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 820;
+}
+
 .settings-panel .font-picker-field {
   margin: 14px 0;
 }
@@ -7462,7 +7469,7 @@ body.version-sidebar-resize-active * {
   display: grid;
   grid-template-columns: 1fr;
   gap: 10px;
-  margin: 6px 0;
+  margin: 10px 0 12px;
 }
 
 .settings-toggle {
@@ -7557,8 +7564,35 @@ body.version-sidebar-resize-active * {
 .reader-font-setting-grid {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 12px;
-  margin: 14px 0;
+  gap: 8px;
+  margin: 0;
+}
+
+.reader-font-setting-grid .font-picker-field {
+  margin: 0;
+}
+
+.reader-font-setting-grid .font-picker-label {
+  margin-bottom: 6px;
+}
+
+.reader-version-setting {
+  margin: 0 0 12px;
+}
+
+.settings-group {
+  margin: 14px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.settings-control-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-control-stack label {
+  margin: 0;
 }
 
 .open-source-section {

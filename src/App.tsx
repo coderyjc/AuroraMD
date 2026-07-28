@@ -4186,21 +4186,6 @@ export default function App() {
             <h2>{reader?.chapter.title}</h2>
           </div>
           <div className="toolbar-controls">
-            {reader && (
-              <select
-                value={reader.version.id}
-                onChange={(event) => void selectVersion(event.target.value)}
-                title="章节版本"
-              >
-                {reader.versions.map((version) => (
-                  <option key={version.id} value={version.id}>
-                    {version.id === reader.chapter.currentVersionId
-                      ? `当前版本 v${version.versionNumber}`
-                      : `v${version.versionNumber}`}
-                  </option>
-                ))}
-              </select>
-            )}
             <button
               className="icon-button"
               title="导出批注"
@@ -4397,10 +4382,14 @@ export default function App() {
           closing={settingsClosing}
           settings={settings}
           systemFonts={systemFonts}
+          currentVersionId={reader?.version.id ?? null}
+          currentChapterVersionId={reader?.chapter.currentVersionId ?? null}
+          versions={reader?.versions ?? []}
           showChangeHighlights={showChangeHighlights}
           changeHighlightBusy={changeHighlightBusy}
           hasPreviousVersion={Boolean(previousReaderVersion)}
           onChange={applySettings}
+          onVersionChange={(chapterVersionId) => void selectVersion(chapterVersionId)}
           onChangeHighlightToggle={setShowChangeHighlights}
           onClose={closeReaderSettingsPanel}
         />
