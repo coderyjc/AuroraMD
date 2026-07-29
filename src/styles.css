@@ -2884,6 +2884,33 @@ button:disabled {
   color: var(--accent);
 }
 
+.reader-ai-rewrite-button {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+
+.reader-ai-rewrite-button svg {
+  position: relative;
+  z-index: 1;
+}
+
+.reader-ai-rewrite-button.is-rewriting {
+  border-color: var(--button-primary-border);
+  background: var(--button-primary-bg);
+  color: var(--button-primary-ink);
+}
+
+.reader-ai-rewrite-button.is-rewriting svg {
+  animation: ai-rewrite-spin 960ms linear infinite;
+}
+
+.reader-ai-rewrite-button.has-finished-draft {
+  border-color: var(--button-primary-border);
+  background: var(--button-primary-bg);
+  color: var(--button-primary-ink);
+}
+
 .icon-button.small {
   width: 28px;
   height: 28px;
@@ -7615,6 +7642,12 @@ body.version-sidebar-resize-active * {
   }
 }
 
+@keyframes ai-rewrite-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @keyframes surface-enter {
   from {
     opacity: 0;
@@ -8414,6 +8447,12 @@ body.version-sidebar-resize-active * {
 .theme-focus .reader-left,
 .theme-focus .reader-right {
   opacity: 0.92;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reader-ai-rewrite-button.is-rewriting svg {
+    animation: none;
+  }
 }
 
 @media (max-width: 1120px) {

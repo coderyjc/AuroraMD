@@ -622,6 +622,7 @@ export default function App() {
   const [rewriteSegments, setRewriteSegments] = useState<RewriteDiffSegment[]>([]);
   const [selectedRewriteSegmentIds, setSelectedRewriteSegmentIds] = useState<string[]>([]);
   const [rewriteApplyConfirmOpen, setRewriteApplyConfirmOpen] = useState(false);
+  const [rewriteResultUnread, setRewriteResultUnread] = useState(false);
   const [copied, setCopied] = useState(false);
   const [draftClosing, setDraftClosing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -663,6 +664,7 @@ export default function App() {
   const rewriteRevealRunRef = useRef(0);
   const rewriteRequestRunRef = useRef(0);
   const rewriteCancelRequestedRef = useRef(false);
+  const exportModalVisibleRef = useRef(false);
 
   latestSettingsRef.current = settings;
 
@@ -2678,6 +2680,7 @@ export default function App() {
     rewriteCancelRequestedRef.current = false;
     setBusy(true);
     setError("");
+    setRewriteResultUnread(false);
     setRewriteDraftText("");
     setRewriteVisibleText("");
     setRewriteSegments([]);
@@ -2705,6 +2708,8 @@ export default function App() {
       setSelectedRewriteSegmentIds(segments.map((segment) => segment.id));
       setRewritePhase("ready");
       setRewriteProgress(100);
+      setNotice("AI 重写已完成，草稿 Diff 已生成。");
+      setRewriteResultUnread(!exportModalVisibleRef.current);
     } catch (err) {
       const message = readError(err);
       stopAiRewriteProgress();
@@ -2733,6 +2738,7 @@ export default function App() {
     stopAiRewriteProgress();
     setBusy(false);
     setError("");
+    setRewriteResultUnread(false);
     setRewritePhase("idle");
     setRewriteProgress(0);
     setRewriteVisibleText("");
@@ -2797,6 +2803,7 @@ export default function App() {
     setRewriteSegments([]);
     setSelectedRewriteSegmentIds([]);
     setRewriteApplyConfirmOpen(false);
+    setRewriteResultUnread(false);
   }
 
   function startAiRewriteProgress() {
@@ -3329,16 +3336,23 @@ export default function App() {
   }
 
   function openExportModal() {
+    const hasAiRewriteSession =
+      rewritePhase === "rewriting" ||
+      rewritePhase === "revealing" ||
+      (rewritePhase === "ready" && Boolean(rewriteDraftText.trim()));
+    exportModalVisibleRef.current = true;
     setExportClosing(false);
-    setExportText("");
-    resetAiRewriteDraft();
+    setRewriteResultUnread(false);
+    if (!hasAiRewriteSession) {
+      setExportText("");
+      resetAiRewriteDraft();
+    }
     setExportOpen(true);
   }
 
   function closeExportModal() {
-    if (rewritePhase === "rewriting" || rewritePhase === "revealing") {
-      void stopAiRewrite(false);
-    } else {
+    exportModalVisibleRef.current = false;
+    if (rewritePhase !== "rewriting" && rewritePhase !== "revealing") {
       resetAiRewriteDraft();
     }
     animateClose(setExportClosing, () => setExportOpen(false));
@@ -4437,8 +4451,16 @@ export default function App() {
           </div>
           <div className="toolbar-controls">
             <button
-              className="icon-button"
-              title="AI重写"
+              className={`icon-button reader-ai-rewrite-button ${
+                rewritePhase === "rewriting" || rewritePhase === "revealing" ? "is-rewriting" : ""
+              } ${rewriteResultUnread ? "has-finished-draft" : ""}`}
+              title={
+                rewritePhase === "rewriting" || rewritePhase === "revealing"
+                  ? "AI重写生成中"
+                  : rewriteResultUnread
+                    ? "查看 AI 重写草稿"
+                    : "AI重写"
+              }
               onClick={openExportModal}
             >
               <WandSparkles size={18} />
