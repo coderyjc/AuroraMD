@@ -1,4 +1,4 @@
-import { AlertTriangle, Archive, ArrowRight, BookOpen, Check, ChevronLeft, ChevronRight, Copy, Database, Download, FileText, FolderOpen, Github, GripVertical, Keyboard, List, MessageSquare, Palette, Pencil, Pin, PinOff, Plus, RefreshCw, Save, Search, Trash2, Type, Upload, X } from "lucide-react";
+import { AlertTriangle, Archive, ArrowRight, BookOpen, Check, ChevronLeft, ChevronRight, Copy, Database, Download, FileText, FolderOpen, Github, GripVertical, Keyboard, List, MessageSquare, Palette, Pencil, Pin, PinOff, Plus, RefreshCw, Save, Search, Trash2, Type, Upload, WandSparkles, X } from "lucide-react";
 import { type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   deleteChapter,
@@ -29,6 +29,7 @@ import { locateAnnotationInText } from "../../markdown";
 import type {
   Annotation,
   AppSettings,
+  AiRequestFormat,
   BackupResult,
   BookSummary,
   Chapter,
@@ -814,9 +815,9 @@ export function HomeSettingsModal({
     },
     {
       id: "prompts",
-      label: "Prompt 预设",
-      description: "导出模板",
-      icon: <FileText size={16} />,
+      label: "AI配置",
+      description: "API、任务包",
+      icon: <WandSparkles size={16} />,
     },
     {
       id: "backup",
@@ -1278,9 +1279,59 @@ export function HomeSettingsModal({
 
             {activeCategory === "prompts" && (
               <div className="settings-pane">
+                <section className="settings-section ai-config-section">
+                  <h3>
+                    <WandSparkles size={16} /> API配置
+                  </h3>
+                  <div className="ai-config-grid">
+                    <label className="modal-field ai-config-base-url">
+                      Base URL
+                      <input
+                        value={settings.aiBaseUrl}
+                        onChange={(event) => onChange({ aiBaseUrl: event.target.value })}
+                        placeholder="例如 https://api.openai.com/v1"
+                      />
+                    </label>
+                    <label className="modal-field">
+                      请求格式
+                      <select
+                        value={settings.aiRequestFormat}
+                        onChange={(event) =>
+                          onChange({ aiRequestFormat: event.target.value as AiRequestFormat })
+                        }
+                      >
+                        <option value="openai">OpenAI 兼容</option>
+                        <option value="anthropic">Anthropic</option>
+                      </select>
+                    </label>
+                    <label className="modal-field">
+                      API Key
+                      <input
+                        type="password"
+                        value={settings.aiApiKey}
+                        onChange={(event) => onChange({ aiApiKey: event.target.value })}
+                        placeholder="sk-..."
+                        autoComplete="off"
+                      />
+                    </label>
+                    <label className="modal-field">
+                      模型名称
+                      <input
+                        value={settings.aiModel}
+                        onChange={(event) => onChange({ aiModel: event.target.value })}
+                        placeholder="例如 gpt-4.1 / deepseek-chat / claude-sonnet-4"
+                      />
+                    </label>
+                  </div>
+                  <p className="muted">
+                    OpenAI 兼容服务会调用 <code>Base URL + /chat/completions</code>；Anthropic 会调用{" "}
+                    <code>Base URL + /messages</code>。
+                  </p>
+                </section>
+
                 <section className="settings-section">
                   <h3>
-                    <FileText size={16} /> Prompt 预设
+                    <FileText size={16} /> 任务包预设
                   </h3>
                   <div className="prompt-preset-manager">
                     <aside className="prompt-preset-list">

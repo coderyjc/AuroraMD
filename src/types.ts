@@ -158,7 +158,13 @@ export interface AppSettings {
   autoBackupEnabled: boolean;
   autoBackupIntervalMinutes: number;
   autoBackupDirectory: string;
+  aiBaseUrl: string;
+  aiRequestFormat: AiRequestFormat;
+  aiApiKey: string;
+  aiModel: string;
 }
+
+export type AiRequestFormat = "openai" | "anthropic";
 
 export type HomeLibraryView = "grid" | "table";
 
@@ -227,6 +233,17 @@ export type ExportPresetPayload = Pick<
   ExportPreset,
   "name" | "baseTemplateId" | "systemPrompt" | "taskPrompt"
 >;
+
+export interface AiRewritePayload {
+  chapterId: string;
+  chapterTitle: string;
+  originalMarkdown: string;
+  annotationMarkdown: string;
+}
+
+export interface AiRewriteResult {
+  content: string;
+}
 
 export interface FolderSyncReport {
   added: number;

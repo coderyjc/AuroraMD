@@ -45,7 +45,7 @@ export function shortcutActionLabel(action: ShortcutAction) {
     nextChapter: "下一章",
     previousChapter: "上一章",
     highlight: "添加高亮",
-    export: "导出",
+    export: "AI重写",
     toggleLeft: "左栏",
     toggleRight: "右栏",
   };

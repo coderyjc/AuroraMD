@@ -107,7 +107,11 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
             shortcut_bindings TEXT NOT NULL,
             auto_backup_enabled INTEGER NOT NULL DEFAULT 0,
             auto_backup_interval_minutes INTEGER NOT NULL DEFAULT 30,
-            auto_backup_directory TEXT NOT NULL DEFAULT ''
+            auto_backup_directory TEXT NOT NULL DEFAULT '',
+            ai_base_url TEXT NOT NULL DEFAULT '',
+            ai_request_format TEXT NOT NULL DEFAULT 'openai',
+            ai_api_key TEXT NOT NULL DEFAULT '',
+            ai_model TEXT NOT NULL DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS export_presets (
@@ -245,6 +249,30 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
     ensure_column(
         &conn,
         "settings",
+        "ai_base_url",
+        "ALTER TABLE settings ADD COLUMN ai_base_url TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_column(
+        &conn,
+        "settings",
+        "ai_request_format",
+        "ALTER TABLE settings ADD COLUMN ai_request_format TEXT NOT NULL DEFAULT 'openai'",
+    )?;
+    ensure_column(
+        &conn,
+        "settings",
+        "ai_api_key",
+        "ALTER TABLE settings ADD COLUMN ai_api_key TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_column(
+        &conn,
+        "settings",
+        "ai_model",
+        "ALTER TABLE settings ADD COLUMN ai_model TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_column(
+        &conn,
+        "settings",
         "interface_font_family",
         "ALTER TABLE settings ADD COLUMN interface_font_family TEXT NOT NULL DEFAULT '\"IBM Plex Sans\", \"Segoe UI\", \"Microsoft YaHei\", sans-serif'",
     )?;
@@ -352,8 +380,12 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
             shortcut_bindings,
             auto_backup_enabled,
             auto_backup_interval_minutes,
-            auto_backup_directory
-        ) VALUES (1, 100, 'classic', 'paper', 'Literata, Georgia, serif', '"IBM Plex Sans", "Segoe UI", "Microsoft YaHei", sans-serif', '"IBM Plex Sans", "Segoe UI", sans-serif', '"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif', 'Literata, Georgia, serif', 'Literata, Georgia, serif', '"Noto Serif SC", "Songti SC", SimSun, serif', 18, 1.72, 820, 52, 18, 'warm', 'hairline', 0, 0, 'grid', '{"rowNumber":true,"rootPath":true,"chapterCount":true,"annotationCount":true,"createdAt":true,"lastOpenedAt":true}', 20, '{"search":"Ctrl+K","nextChapter":"N","previousChapter":"P","highlight":"H","export":"E","toggleLeft":"[","toggleRight":"]"}', 0, 30, '')
+            auto_backup_directory,
+            ai_base_url,
+            ai_request_format,
+            ai_api_key,
+            ai_model
+        ) VALUES (1, 100, 'classic', 'paper', 'Literata, Georgia, serif', '"IBM Plex Sans", "Segoe UI", "Microsoft YaHei", sans-serif', '"IBM Plex Sans", "Segoe UI", sans-serif', '"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif', 'Literata, Georgia, serif', 'Literata, Georgia, serif', '"Noto Serif SC", "Songti SC", SimSun, serif', 18, 1.72, 820, 52, 18, 'warm', 'hairline', 0, 0, 'grid', '{"rowNumber":true,"rootPath":true,"chapterCount":true,"annotationCount":true,"createdAt":true,"lastOpenedAt":true}', 20, '{"search":"Ctrl+K","nextChapter":"N","previousChapter":"P","highlight":"H","export":"E","toggleLeft":"[","toggleRight":"]"}', 0, 30, '', '', 'openai', '', '')
         "#,
         [],
     )?;

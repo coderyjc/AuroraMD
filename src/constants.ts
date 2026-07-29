@@ -703,4 +703,8 @@ export const defaultSettings: AppSettings = {
   autoBackupEnabled: false,
   autoBackupIntervalMinutes: 30,
   autoBackupDirectory: "",
+  aiBaseUrl: "",
+  aiRequestFormat: "openai",
+  aiApiKey: "",
+  aiModel: "",
 };

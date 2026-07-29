@@ -5,6 +5,8 @@ import type {
   AnnotationScope,
   AnnotationStatus,
   AppSettings,
+  AiRewritePayload,
+  AiRewriteResult,
   BackupResult,
   Book,
   BookSummary,
@@ -195,6 +197,18 @@ export async function exportAnnotations(
     promptPresetId,
     includeEmptyAnnotations,
   });
+}
+
+export async function runAiRewrite(payload: AiRewritePayload) {
+  return invoke<AiRewriteResult>("run_ai_rewrite", { payload });
+}
+
+export async function cancelAiRewrite() {
+  return invoke<void>("cancel_ai_rewrite");
+}
+
+export async function applyAiRewrite(chapterId: string, content: string) {
+  return invoke<ReadChapterResponse>("apply_ai_rewrite", { payload: { chapterId, content } });
 }
 
 export async function exportBackup() {

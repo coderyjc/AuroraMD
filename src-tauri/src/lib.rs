@@ -1,9 +1,12 @@
+use futures_util::future::{select, Either};
 use rusqlite::{params, Connection, OptionalExtension};
+use serde_json::{json, Value};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{Manager, PhysicalPosition, PhysicalSize, State};
+use tokio::sync::watch;
 #[cfg(target_os = "windows")]
 use windows::{
     core::{w, HRESULT, PCWSTR, PWSTR},
@@ -40,6 +43,12 @@ struct AppState {
     conn: Mutex<Connection>,
     db_path: PathBuf,
     app_data_dir: PathBuf,
+    ai_rewrite_cancel: Mutex<Option<AiRewriteCancelHandle>>,
+}
+
+struct AiRewriteCancelHandle {
+    id: String,
+    sender: watch::Sender<bool>,
 }
 
 const INITIAL_WINDOW_WIDTH_RATIO: f64 = 0.69;
@@ -66,6 +75,7 @@ pub fn run() {
                 conn: Mutex::new(conn),
                 db_path,
                 app_data_dir,
+                ai_rewrite_cancel: Mutex::new(None),
             });
             Ok(())
         })
@@ -109,6 +119,9 @@ pub fn run() {
             update_export_preset,
             delete_export_preset,
             export_annotations,
+            run_ai_rewrite,
+            cancel_ai_rewrite,
+            apply_ai_rewrite,
             export_backup,
             restore_backup,
             pick_auto_backup_directory,
@@ -1830,6 +1843,192 @@ fn export_annotations(
     ))
 }
 
+fn clear_ai_rewrite_cancel(state: &State<'_, AppState>, cancel_id: &str) {
+    if let Ok(mut active_cancel) = state.ai_rewrite_cancel.lock() {
+        let should_clear = active_cancel
+            .as_ref()
+            .map(|handle| handle.id == cancel_id)
+            .unwrap_or(false);
+        if should_clear {
+            *active_cancel = None;
+        }
+    }
+}
+
+async fn wait_for_ai_rewrite_cancel(cancel_rx: &mut watch::Receiver<bool>) {
+    loop {
+        if *cancel_rx.borrow() {
+            return;
+        }
+        if cancel_rx.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
+#[tauri::command]
+async fn run_ai_rewrite(
+    payload: AiRewritePayload,
+    state: State<'_, AppState>,
+) -> AppResult<AiRewriteResult> {
+    let settings = {
+        let conn = lock_conn(&state)?;
+        load_settings(&conn)?
+    };
+    validate_ai_settings(&settings)?;
+
+    let request_format = normalize_ai_request_format(&settings.ai_request_format);
+    let endpoint = resolve_ai_endpoint(&settings.ai_base_url, request_format);
+    let system_prompt = build_ai_rewrite_system_prompt();
+    let user_prompt = build_ai_rewrite_user_prompt(&payload);
+    let client = reqwest::Client::new();
+    let body = if request_format == "anthropic" {
+        json!({
+            "model": settings.ai_model,
+            "max_tokens": 8192,
+            "temperature": 0.2,
+            "system": system_prompt,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": user_prompt
+                }
+            ]
+        })
+    } else {
+        json!({
+            "model": settings.ai_model,
+            "temperature": 0.2,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": user_prompt
+                }
+            ]
+        })
+    };
+
+    let mut request = client.post(endpoint).json(&body);
+    request = if request_format == "anthropic" {
+        request
+            .header("x-api-key", settings.ai_api_key)
+            .header("anthropic-version", "2023-06-01")
+    } else {
+        request.bearer_auth(settings.ai_api_key)
+    };
+
+    let cancel_id = new_id();
+    let (cancel_tx, mut cancel_rx) = watch::channel(false);
+    {
+        let mut active_cancel = state
+            .ai_rewrite_cancel
+            .lock()
+            .map_err(|_| "AI 重写停止状态不可用。".to_string())?;
+        if let Some(previous) = active_cancel.take() {
+            let _ = previous.sender.send(true);
+        }
+        *active_cancel = Some(AiRewriteCancelHandle {
+            id: cancel_id.clone(),
+            sender: cancel_tx,
+        });
+    }
+
+    let response_result = async {
+        let response = request
+            .send()
+            .await
+            .map_err(|error| format!("AI API 请求失败：{error}"))?;
+        let status = response.status();
+        let body_text = response
+            .text()
+            .await
+            .map_err(|error| format!("读取 AI API 响应失败：{error}"))?;
+        Ok::<_, String>((status, body_text))
+    };
+    let response_future = Box::pin(response_result);
+    let cancel_future = Box::pin(wait_for_ai_rewrite_cancel(&mut cancel_rx));
+    let (status, body_text) = match select(response_future, cancel_future).await {
+        Either::Left((result, _cancel_future)) => match result {
+            Ok(value) => value,
+            Err(error) => {
+                clear_ai_rewrite_cancel(&state, &cancel_id);
+                return Err(error);
+            }
+        },
+        Either::Right(((), _response_future)) => {
+            clear_ai_rewrite_cancel(&state, &cancel_id);
+            return Err("AI 重写已停止。".to_string());
+        }
+    };
+    clear_ai_rewrite_cancel(&state, &cancel_id);
+
+    if !status.is_success() {
+        return Err(format!(
+            "AI API 请求失败（{}）：{}",
+            status.as_u16(),
+            truncate_error_body(&body_text)
+        ));
+    }
+
+    let value: Value = serde_json::from_str(&body_text)
+        .map_err(|error| format!("AI API 返回了无法解析的 JSON：{error}"))?;
+    let content = if request_format == "anthropic" {
+        extract_anthropic_text(&value)
+    } else {
+        extract_openai_text(&value)
+    }
+    .ok_or_else(|| "AI API 响应中没有找到重写内容。".to_string())?;
+    let content = clean_ai_rewrite_content(content);
+    if content.trim().is_empty() {
+        return Err("AI 返回了空重写稿。".to_string());
+    }
+
+    Ok(AiRewriteResult { content })
+}
+
+#[tauri::command]
+fn cancel_ai_rewrite(state: State<AppState>) -> AppResult<()> {
+    let cancel_handle = {
+        let mut active_cancel = state
+            .ai_rewrite_cancel
+            .lock()
+            .map_err(|_| "AI 重写停止状态不可用。".to_string())?;
+        active_cancel.take()
+    };
+    if let Some(handle) = cancel_handle {
+        let _ = handle.sender.send(true);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn apply_ai_rewrite(
+    payload: ApplyAiRewritePayload,
+    state: State<AppState>,
+) -> AppResult<ReadChapterResponse> {
+    let content = payload.content.trim_end_matches('\0').to_string();
+    if content.trim().is_empty() {
+        return Err("重写稿为空，无法替换源文件。".to_string());
+    }
+
+    let mut conn = lock_conn(&state)?;
+    let chapter = get_chapter_by_id(&conn, &payload.chapter_id)?;
+    let chapter_path = PathBuf::from(&chapter.file_path);
+    if !chapter_path.is_file() {
+        return Err("章节源文件不存在，无法替换。".to_string());
+    }
+
+    fs::write(&chapter_path, content)
+        .map_err(|error| format!("写入章节源文件失败：{error}"))?;
+    ensure_current_chapter_version(&mut conn, &payload.chapter_id)?;
+    let chapter = get_chapter_by_id(&conn, &payload.chapter_id)?;
+    read_chapter_payload(&conn, &chapter.current_version_id)
+}
+
 #[tauri::command]
 fn export_backup(state: State<AppState>) -> AppResult<BackupResult> {
     let target_path = pick_backup_save_path()?;
@@ -2111,6 +2310,46 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
     } else {
         Ok(())
     };
+    let ai_config_restore_result = if restore_result.is_ok()
+        && backup_has_column(&conn, "settings", "ai_base_url")?
+        && backup_has_column(&conn, "settings", "ai_request_format")?
+        && backup_has_column(&conn, "settings", "ai_api_key")?
+        && backup_has_column(&conn, "settings", "ai_model")?
+    {
+        conn.execute_batch(
+            r#"
+            UPDATE settings
+            SET
+                ai_base_url = (
+                    SELECT ai_base_url
+                    FROM backup.settings
+                    WHERE backup.settings.id = settings.id
+                ),
+                ai_request_format = (
+                    SELECT ai_request_format
+                    FROM backup.settings
+                    WHERE backup.settings.id = settings.id
+                ),
+                ai_api_key = (
+                    SELECT ai_api_key
+                    FROM backup.settings
+                    WHERE backup.settings.id = settings.id
+                ),
+                ai_model = (
+                    SELECT ai_model
+                    FROM backup.settings
+                    WHERE backup.settings.id = settings.id
+                )
+            WHERE EXISTS (
+                SELECT 1
+                FROM backup.settings
+                WHERE backup.settings.id = settings.id
+            );
+            "#,
+        )
+    } else {
+        Ok(())
+    };
     let split_font_restore_result = if restore_result.is_ok()
         && backup_has_column(&conn, "settings", "interface_latin_font_family")?
         && backup_has_column(&conn, "settings", "interface_cjk_font_family")?
@@ -2311,6 +2550,8 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
         .map_err(|error| format!("Failed to restore home page size setting: {error}"))?;
     auto_backup_restore_result
         .map_err(|error| format!("Failed to restore auto backup settings: {error}"))?;
+    ai_config_restore_result
+        .map_err(|error| format!("Failed to restore AI settings: {error}"))?;
     split_font_restore_result
         .map_err(|error| format!("Failed to restore font settings: {error}"))?;
     pinned_restore_result.map_err(|error| format!("Failed to restore pinned books: {error}"))?;
@@ -2424,6 +2665,27 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
         .unwrap_or(current.auto_backup_directory)
         .trim()
         .to_string();
+    let next_ai_request_format = normalize_ai_request_format(
+        &patch
+            .ai_request_format
+            .unwrap_or(current.ai_request_format),
+    )
+    .to_string();
+    let next_ai_base_url = patch
+        .ai_base_url
+        .unwrap_or(current.ai_base_url)
+        .trim()
+        .to_string();
+    let next_ai_api_key = patch
+        .ai_api_key
+        .unwrap_or(current.ai_api_key)
+        .trim()
+        .to_string();
+    let next_ai_model = patch
+        .ai_model
+        .unwrap_or(current.ai_model)
+        .trim()
+        .to_string();
     conn.execute(
         r#"
         UPDATE settings
@@ -2453,7 +2715,11 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
             shortcut_bindings = ?22,
             auto_backup_enabled = ?23,
             auto_backup_interval_minutes = ?24,
-            auto_backup_directory = ?25
+            auto_backup_directory = ?25,
+            ai_base_url = ?26,
+            ai_request_format = ?27,
+            ai_api_key = ?28,
+            ai_model = ?29
         WHERE id = 1
         "#,
         params![
@@ -2487,7 +2753,11 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
                 .auto_backup_enabled
                 .unwrap_or(current.auto_backup_enabled),
             next_auto_backup_interval_minutes,
-            next_auto_backup_directory
+            next_auto_backup_directory,
+            next_ai_base_url,
+            next_ai_request_format,
+            next_ai_api_key,
+            next_ai_model
         ],
     )
     .map_err(|error| format!("Failed to update settings: {error}"))?;
@@ -2497,6 +2767,135 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
 #[tauri::command]
 fn list_system_fonts() -> AppResult<Vec<SystemFont>> {
     collect_system_fonts()
+}
+
+fn validate_ai_settings(settings: &AppSettings) -> AppResult<()> {
+    if settings.ai_base_url.trim().is_empty()
+        || settings.ai_api_key.trim().is_empty()
+        || settings.ai_model.trim().is_empty()
+    {
+        return Err("还没有配置 AI API，请先到主页设置的 AI配置中填写 Base URL、API Key 和模型名称。".to_string());
+    }
+    Ok(())
+}
+
+fn normalize_ai_request_format(value: &str) -> &str {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "anthropic" => "anthropic",
+        _ => "openai",
+    }
+}
+
+fn resolve_ai_endpoint(base_url: &str, request_format: &str) -> String {
+    let base_url = base_url.trim().trim_end_matches('/');
+    if request_format == "anthropic" {
+        if base_url.ends_with("/messages") {
+            base_url.to_string()
+        } else {
+            format!("{base_url}/messages")
+        }
+    } else if base_url.ends_with("/chat/completions") {
+        base_url.to_string()
+    } else {
+        format!("{base_url}/chat/completions")
+    }
+}
+
+fn build_ai_rewrite_system_prompt() -> &'static str {
+    "你是 AuroraMD 的章节重写引擎。你会收到一个完整 Markdown 章节和一份由读者批注生成的修改包。请严格基于原文和批注重写整个章节，保留 Markdown 结构、标题层级、事实边界和作者原意。只输出重写后的完整 Markdown 正文，不要输出解释、差异摘要或额外包裹。"
+}
+
+fn build_ai_rewrite_user_prompt(payload: &AiRewritePayload) -> String {
+    format!(
+        r#"请根据批注修改包重写当前整个章节。
+
+章节标题：{}
+
+输出要求：
+- 输出完整章节 Markdown。
+- 保留原章节中仍然有效的标题、列表、引用、代码块和 Mermaid 代码块。
+- 只处理批注明确指出的问题；没有批注依据的部分保持克制。
+- 不要覆盖源文件，这一步只生成草稿。
+
+## 原章节 Markdown
+
+````markdown
+{}
+````
+
+## 批注修改包
+
+````markdown
+{}
+````
+"#,
+        payload.chapter_title.trim(),
+        payload.original_markdown,
+        payload.annotation_markdown
+    )
+}
+
+fn extract_openai_text(value: &Value) -> Option<String> {
+    value
+        .pointer("/choices/0/message/content")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .or_else(|| {
+            value
+                .pointer("/choices/0/text")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        })
+}
+
+fn extract_anthropic_text(value: &Value) -> Option<String> {
+    let content = value.get("content")?.as_array()?;
+    let mut text = String::new();
+    for item in content {
+        if let Some(part) = item.get("text").and_then(Value::as_str) {
+            if !text.is_empty() {
+                text.push_str("\n\n");
+            }
+            text.push_str(part);
+        }
+    }
+    if text.trim().is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+fn clean_ai_rewrite_content(content: String) -> String {
+    let trimmed = content.trim();
+    if !trimmed.starts_with("```") || !trimmed.ends_with("```") {
+        return trimmed.to_string();
+    }
+
+    let mut lines: Vec<&str> = trimmed.lines().collect();
+    if lines.len() < 2 {
+        return trimmed.to_string();
+    }
+    let first = lines.first().copied().unwrap_or_default().trim();
+    let last = lines.last().copied().unwrap_or_default().trim();
+    if first.starts_with("```") && last == "```" {
+        lines.remove(0);
+        lines.pop();
+        lines.join("\n").trim().to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn truncate_error_body(value: &str) -> String {
+    let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() > 500 {
+        let mut out = collapsed.chars().take(500).collect::<String>();
+        out.push_str("...");
+        out
+    } else {
+        collapsed
+    }
 }
 
 fn compose_font_family(latin_font_family: &str, cjk_font_family: &str, fallback: &str) -> String {
@@ -3490,7 +3889,11 @@ fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
             shortcut_bindings,
             auto_backup_enabled,
             auto_backup_interval_minutes,
-            auto_backup_directory
+            auto_backup_directory,
+            ai_base_url,
+            ai_request_format,
+            ai_api_key,
+            ai_model
         FROM settings
         WHERE id = 1
         "#,
@@ -3522,6 +3925,10 @@ fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
                 auto_backup_enabled: row.get(22)?,
                 auto_backup_interval_minutes: row.get(23)?,
                 auto_backup_directory: row.get(24)?,
+                ai_base_url: row.get(25)?,
+                ai_request_format: row.get(26)?,
+                ai_api_key: row.get(27)?,
+                ai_model: row.get(28)?,
             })
         },
     )

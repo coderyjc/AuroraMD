@@ -239,6 +239,10 @@ pub struct AppSettings {
     pub auto_backup_enabled: bool,
     pub auto_backup_interval_minutes: i64,
     pub auto_backup_directory: String,
+    pub ai_base_url: String,
+    pub ai_request_format: String,
+    pub ai_api_key: String,
+    pub ai_model: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -291,6 +295,32 @@ pub struct SettingsPatch {
     pub auto_backup_enabled: Option<bool>,
     pub auto_backup_interval_minutes: Option<i64>,
     pub auto_backup_directory: Option<String>,
+    pub ai_base_url: Option<String>,
+    pub ai_request_format: Option<String>,
+    pub ai_api_key: Option<String>,
+    pub ai_model: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiRewritePayload {
+    pub chapter_id: String,
+    pub chapter_title: String,
+    pub original_markdown: String,
+    pub annotation_markdown: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiRewriteResult {
+    pub content: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyAiRewritePayload {
+    pub chapter_id: String,
+    pub content: String,
 }
 
 #[derive(Debug, Serialize)]

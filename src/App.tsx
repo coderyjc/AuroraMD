@@ -3,7 +3,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Check,
-  Download,
   FileText,
   FolderPlus,
   Grid3X3,
@@ -21,6 +20,7 @@ import {
   Settings,
   Square,
   Trash2,
+  WandSparkles,
   X,
 } from "lucide-react";
 import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
@@ -41,6 +41,8 @@ import {
   createAnnotation,
   createAutoBackup,
   createExportPreset,
+  applyAiRewrite,
+  cancelAiRewrite,
   clearChapterReadingProgress,
   deleteAnnotation,
   deleteBook,
@@ -73,6 +75,7 @@ import {
   readChapterVersion,
   refreshChapterVersion,
   reorderChapters,
+  runAiRewrite,
   restoreBackup,
   saveReadingProgress,
   syncBookFolder,
@@ -109,6 +112,8 @@ import {
   SettingsPanel,
   SortChaptersModal,
   TopNotice,
+  type AiRewritePhase,
+  type RewriteDiffSegment,
   type SelectionDraft,
 } from "./components/reader/ReaderComponents";
 import {
@@ -448,6 +453,63 @@ function compareBookValues(left: BookSummary, right: BookSummary, key: BookTable
   return (Number.isNaN(leftTime) ? 0 : leftTime) - (Number.isNaN(rightTime) ? 0 : rightTime);
 }
 
+function buildRewriteDiffSegments(oldContent: string, newContent: string): RewriteDiffSegment[] {
+  return diffMarkdownLines(oldContent, newContent).map((block) => ({
+    id: block.id,
+    type: block.type,
+    oldStart: block.oldStart,
+    newStart: block.newStart,
+    oldLines: block.oldLines,
+    newLines: block.newLines,
+  }));
+}
+
+function composeSelectedRewriteContent(
+  oldContent: string,
+  newContent: string,
+  segments: RewriteDiffSegment[],
+  selectedSegmentIds: Set<string>,
+) {
+  if (segments.length === 0) return newContent;
+
+  const oldLines = splitMarkdownLines(oldContent);
+  const newLines = splitMarkdownLines(newContent);
+  const finalLines: string[] = [];
+  let oldIndex = 0;
+  let newIndex = 0;
+
+  for (const segment of segments) {
+    const oldStartIndex = Math.max(0, segment.oldStart - 1);
+    const newStartIndex = Math.max(0, segment.newStart - 1);
+    finalLines.push(...oldLines.slice(oldIndex, oldStartIndex));
+
+    if (selectedSegmentIds.has(segment.id)) {
+      finalLines.push(...segment.newLines);
+    } else {
+      finalLines.push(...segment.oldLines);
+    }
+
+    oldIndex = oldStartIndex + segment.oldLines.length;
+    newIndex = newStartIndex + segment.newLines.length;
+  }
+
+  finalLines.push(...oldLines.slice(oldIndex));
+  if (oldIndex >= oldLines.length && newIndex < newLines.length) {
+    finalLines.push(...newLines.slice(newIndex));
+  }
+  return finalLines.join("\n");
+}
+
+function splitMarkdownLines(content: string) {
+  return content.replace(/\r\n/g, "\n").split("\n");
+}
+
+function delay(ms: number) {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
 export default function App() {
   const [books, setBooks] = useState<BookSummary[]>([]);
   const [homeView, setHomeView] = useState<HomeView>(defaultSettings.homeDefaultView);
@@ -549,12 +611,17 @@ export default function App() {
   const [readerMotion, setReaderMotion] = useState<"content" | "jump" | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [exportClosing, setExportClosing] = useState(false);
-  const [exportTemplate, setExportTemplate] = useState<ExportTemplate>("reading-notes");
+  const [exportTemplate, setExportTemplate] = useState<ExportTemplate>("ai-pack");
   const [exportTaskGoal, setExportTaskGoal] = useState<ExportTaskGoal>("rewrite");
   const [exportPresetId, setExportPresetId] = useState("");
-  const [exportScope, setExportScope] = useState<"chapter" | "book">("chapter");
-  const [exportIncludeEmptyAnnotations, setExportIncludeEmptyAnnotations] = useState(true);
   const [exportText, setExportText] = useState("");
+  const [rewritePhase, setRewritePhase] = useState<AiRewritePhase>("idle");
+  const [rewriteProgress, setRewriteProgress] = useState(0);
+  const [rewriteVisibleText, setRewriteVisibleText] = useState("");
+  const [rewriteDraftText, setRewriteDraftText] = useState("");
+  const [rewriteSegments, setRewriteSegments] = useState<RewriteDiffSegment[]>([]);
+  const [selectedRewriteSegmentIds, setSelectedRewriteSegmentIds] = useState<string[]>([]);
+  const [rewriteApplyConfirmOpen, setRewriteApplyConfirmOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [draftClosing, setDraftClosing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -592,6 +659,10 @@ export default function App() {
   const latestSettingsRef = useRef<AppSettings>(defaultSettings);
   const autoBackupInFlightRef = useRef(false);
   const searchThemeSnapshotRef = useRef<Pick<AppSettings, "themeSeries" | "theme"> | null>(null);
+  const rewriteProgressTimerRef = useRef<number | null>(null);
+  const rewriteRevealRunRef = useRef(0);
+  const rewriteRequestRunRef = useRef(0);
+  const rewriteCancelRequestedRef = useRef(false);
 
   latestSettingsRef.current = settings;
 
@@ -2549,27 +2620,33 @@ export default function App() {
 
   async function handleExport() {
     if (!activeBook || !reader) return;
+    const validAnnotations = reader.annotations.filter((annotation) => annotation.comment.trim());
+    if (validAnnotations.length === 0) {
+      setExportText("");
+      resetAiRewriteDraft();
+      setError("当前章节没有带评论的批注，无法生成 AI 重写修改包。");
+      return;
+    }
     setBusy(true);
     setError("");
+    resetAiRewriteDraft();
+    setRewritePhase("generating-markdown");
     try {
       const selectedPreset =
         exportPresets.find((preset) => preset.id === exportPresetId) ?? null;
-      const scope =
-        exportScope === "book"
-          ? { bookId: activeBook.id }
-          : { chapterId: reader.chapter.id, chapterVersionId: reader.version.id };
       const markdown = await exportAnnotations(
-        scope,
+        { chapterId: reader.chapter.id, chapterVersionId: reader.version.id },
         selectedPreset?.baseTemplateId ?? exportTemplate,
         selectedPreset ? undefined : exportTaskGoal,
         selectedPreset?.id,
-        exportIncludeEmptyAnnotations,
+        false,
       );
       setExportText(markdown);
     } catch (err) {
       setError(readError(err));
     } finally {
       setBusy(false);
+      setRewritePhase("idle");
     }
   }
 
@@ -2581,6 +2658,173 @@ export default function App() {
       window.setTimeout(() => setCopied(false), 1200);
     } catch {
       setNotice("当前环境无法直接写入剪贴板，可以手动复制导出内容。");
+    }
+  }
+
+  async function handleAiRewrite() {
+    if (!reader) return;
+    if (!exportText.trim()) {
+      setError("请先生成当前章节的 Markdown 修改包。");
+      return;
+    }
+    if (!settings.aiBaseUrl.trim() || !settings.aiApiKey.trim() || !settings.aiModel.trim()) {
+      setError("还没有配置 AI API，请先到主页设置的 AI配置中填写 Base URL、API Key 和模型名称。");
+      return;
+    }
+
+    const sourceReader = reader;
+    const runId = rewriteRequestRunRef.current + 1;
+    rewriteRequestRunRef.current = runId;
+    rewriteCancelRequestedRef.current = false;
+    setBusy(true);
+    setError("");
+    setRewriteDraftText("");
+    setRewriteVisibleText("");
+    setRewriteSegments([]);
+    setSelectedRewriteSegmentIds([]);
+    setRewriteApplyConfirmOpen(false);
+    setRewritePhase("rewriting");
+    startAiRewriteProgress();
+
+    try {
+      const result = await runAiRewrite({
+        chapterId: sourceReader.chapter.id,
+        chapterTitle: sourceReader.chapter.title,
+        originalMarkdown: sourceReader.content,
+        annotationMarkdown: exportText,
+      });
+      if (rewriteCancelRequestedRef.current || rewriteRequestRunRef.current !== runId) return;
+      stopAiRewriteProgress();
+      setRewriteProgress(92);
+      setRewritePhase("revealing");
+      setRewriteDraftText(result.content);
+      await revealRewriteDraft(result.content);
+      if (rewriteCancelRequestedRef.current || rewriteRequestRunRef.current !== runId) return;
+      const segments = buildRewriteDiffSegments(sourceReader.content, result.content);
+      setRewriteSegments(segments);
+      setSelectedRewriteSegmentIds(segments.map((segment) => segment.id));
+      setRewritePhase("ready");
+      setRewriteProgress(100);
+    } catch (err) {
+      const message = readError(err);
+      stopAiRewriteProgress();
+      if (
+        rewriteCancelRequestedRef.current ||
+        rewriteRequestRunRef.current !== runId ||
+        message.includes("AI 重写已停止")
+      ) {
+        return;
+      }
+      setRewritePhase("idle");
+      setRewriteProgress(0);
+      setError(message);
+    } finally {
+      if (rewriteCancelRequestedRef.current || rewriteRequestRunRef.current === runId) {
+        setBusy(false);
+      }
+    }
+  }
+
+  async function stopAiRewrite(showNotice = true) {
+    if (rewritePhase !== "rewriting" && rewritePhase !== "revealing") return;
+    rewriteCancelRequestedRef.current = true;
+    rewriteRequestRunRef.current += 1;
+    rewriteRevealRunRef.current += 1;
+    stopAiRewriteProgress();
+    setBusy(false);
+    setError("");
+    setRewritePhase("idle");
+    setRewriteProgress(0);
+    setRewriteVisibleText("");
+    setRewriteDraftText("");
+    setRewriteSegments([]);
+    setSelectedRewriteSegmentIds([]);
+    setRewriteApplyConfirmOpen(false);
+    try {
+      await cancelAiRewrite();
+      if (showNotice) setNotice("已停止本次 AI 重写。");
+    } catch (err) {
+      if (showNotice) setError(readError(err));
+    }
+  }
+
+  async function handleApplyAiRewrite() {
+    if (!reader || !rewriteDraftText.trim()) return;
+    const selectedSet = new Set(selectedRewriteSegmentIds);
+    const finalContent = composeSelectedRewriteContent(reader.content, rewriteDraftText, rewriteSegments, selectedSet);
+    setBusy(true);
+    setError("");
+    setRewritePhase("applying");
+    try {
+      const updated = await applyAiRewrite(reader.chapter.id, finalContent);
+      setReader(updated);
+      setChapters((current) =>
+        current.map((chapter) => (chapter.id === updated.chapter.id ? updated.chapter : chapter)),
+      );
+      setActiveAnnotationId(null);
+      setDetailAnnotationId(null);
+      setRewriteApplyConfirmOpen(false);
+      setNotice("已替换源文件，并创建新的章节版本快照。");
+      closeExportModal();
+    } catch (err) {
+      setRewritePhase("ready");
+      setError(readError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function toggleRewriteSegment(segmentId: string, selected: boolean) {
+    setSelectedRewriteSegmentIds((current) => {
+      const next = new Set(current);
+      if (selected) {
+        next.add(segmentId);
+      } else {
+        next.delete(segmentId);
+      }
+      return Array.from(next);
+    });
+    setRewriteApplyConfirmOpen(false);
+  }
+
+  function resetAiRewriteDraft() {
+    stopAiRewriteProgress();
+    rewriteRevealRunRef.current += 1;
+    setRewritePhase("idle");
+    setRewriteProgress(0);
+    setRewriteVisibleText("");
+    setRewriteDraftText("");
+    setRewriteSegments([]);
+    setSelectedRewriteSegmentIds([]);
+    setRewriteApplyConfirmOpen(false);
+  }
+
+  function startAiRewriteProgress() {
+    stopAiRewriteProgress();
+    setRewriteProgress(8);
+    rewriteProgressTimerRef.current = window.setInterval(() => {
+      setRewriteProgress((current) => (current >= 88 ? current : current + Math.max(0.8, (90 - current) * 0.08)));
+    }, 180);
+  }
+
+  function stopAiRewriteProgress() {
+    if (rewriteProgressTimerRef.current !== null) {
+      window.clearInterval(rewriteProgressTimerRef.current);
+      rewriteProgressTimerRef.current = null;
+    }
+  }
+
+  async function revealRewriteDraft(content: string) {
+    const runId = rewriteRevealRunRef.current + 1;
+    rewriteRevealRunRef.current = runId;
+    setRewriteVisibleText("");
+    const lines = content.split("\n");
+    const delayMs = Math.max(6, Math.min(22, Math.round(900 / Math.max(lines.length, 1))));
+    for (let index = 0; index < lines.length; index += 1) {
+      if (rewriteRevealRunRef.current !== runId) return;
+      setRewriteVisibleText(lines.slice(0, index + 1).join("\n"));
+      setRewriteProgress(92 + ((index + 1) / Math.max(lines.length, 1)) * 8);
+      await delay(delayMs);
     }
   }
 
@@ -3087,10 +3331,16 @@ export default function App() {
   function openExportModal() {
     setExportClosing(false);
     setExportText("");
+    resetAiRewriteDraft();
     setExportOpen(true);
   }
 
   function closeExportModal() {
+    if (rewritePhase === "rewriting" || rewritePhase === "revealing") {
+      void stopAiRewrite(false);
+    } else {
+      resetAiRewriteDraft();
+    }
     animateClose(setExportClosing, () => setExportOpen(false));
   }
 
@@ -4188,10 +4438,10 @@ export default function App() {
           <div className="toolbar-controls">
             <button
               className="icon-button"
-              title="导出批注"
+              title="AI重写"
               onClick={openExportModal}
             >
-              <Download size={18} />
+              <WandSparkles size={18} />
             </button>
             <button
               className={`icon-button ${isReadingFullscreen ? "active" : ""}`}
@@ -4358,22 +4608,38 @@ export default function App() {
       {exportOpen && (
         <ExportModal
           closing={exportClosing}
-          scope={exportScope}
           template={exportTemplate}
           taskGoal={exportTaskGoal}
           presets={exportPresets}
           presetId={exportPresetId}
-          includeEmptyAnnotations={exportIncludeEmptyAnnotations}
           exportText={exportText}
+          rewritePhase={rewritePhase}
+          rewriteProgress={rewriteProgress}
+          rewriteVisibleText={rewriteVisibleText}
+          rewriteSegments={rewriteSegments}
+          selectedRewriteSegmentIds={selectedRewriteSegmentIds}
+          applyConfirmOpen={rewriteApplyConfirmOpen}
           copied={copied}
           busy={busy}
-          onScopeChange={setExportScope}
           onTemplateChange={setExportTemplate}
           onTaskGoalChange={setExportTaskGoal}
           onPresetChange={setExportPresetId}
-          onIncludeEmptyAnnotationsChange={setExportIncludeEmptyAnnotations}
           onExport={() => void handleExport()}
+          onAiRewrite={() => void handleAiRewrite()}
+          onStopRewrite={() => void stopAiRewrite()}
           onCopy={() => void copyExport()}
+          onToggleRewriteSegment={toggleRewriteSegment}
+          onSelectAllRewriteSegments={() => {
+            setSelectedRewriteSegmentIds(rewriteSegments.map((segment) => segment.id));
+            setRewriteApplyConfirmOpen(false);
+          }}
+          onClearRewriteSegments={() => {
+            setSelectedRewriteSegmentIds([]);
+            setRewriteApplyConfirmOpen(false);
+          }}
+          onRequestApply={() => setRewriteApplyConfirmOpen(true)}
+          onCancelApply={() => setRewriteApplyConfirmOpen(false)}
+          onConfirmApply={() => void handleApplyAiRewrite()}
           onClose={closeExportModal}
         />
       )}

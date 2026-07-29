@@ -4,13 +4,16 @@ import {
   Copy,
   FileText,
   FolderOpen,
+  GitCompare,
   GripVertical,
   Pin,
   PinOff,
   RefreshCw,
+  Replace,
   RotateCcw,
   Save,
   Trash2,
+  WandSparkles,
   X,
 } from "lucide-react";
 import { type MouseEvent as ReactMouseEvent, useEffect, useRef, useState } from "react";
@@ -28,6 +31,7 @@ import type {
   SystemFont,
 } from "../../types";
 import { chapterFileName } from "../../utils/chapters";
+import type { DiffBlockType } from "../../utils/diff";
 
 export interface SelectionDraft {
   selectedText: string;
@@ -74,6 +78,17 @@ export function AnnotationCard({
       {annotation.isPinned && <Pin className="annotation-pin-icon" size={13} aria-hidden="true" />}
     </button>
   );
+}
+
+export type AiRewritePhase = "idle" | "generating-markdown" | "rewriting" | "revealing" | "ready" | "applying";
+
+export interface RewriteDiffSegment {
+  id: string;
+  type: DiffBlockType;
+  oldStart: number;
+  newStart: number;
+  oldLines: string[];
+  newLines: string[];
 }
 
 export function AnnotationContextMenu({
@@ -308,44 +323,67 @@ export function SortChaptersModal({
 
 export function ExportModal({
   closing,
-  scope,
   template,
   taskGoal,
   presets,
   presetId,
-  includeEmptyAnnotations,
   exportText,
+  rewritePhase,
+  rewriteProgress,
+  rewriteVisibleText,
+  rewriteSegments,
+  selectedRewriteSegmentIds,
+  applyConfirmOpen,
   copied,
   busy,
-  onScopeChange,
   onTemplateChange,
   onTaskGoalChange,
   onPresetChange,
-  onIncludeEmptyAnnotationsChange,
   onExport,
+  onAiRewrite,
+  onStopRewrite,
   onCopy,
+  onToggleRewriteSegment,
+  onSelectAllRewriteSegments,
+  onClearRewriteSegments,
+  onRequestApply,
+  onCancelApply,
+  onConfirmApply,
   onClose,
 }: {
   closing: boolean;
-  scope: "chapter" | "book";
   template: ExportTemplate;
   taskGoal: ExportTaskGoal;
   presets: ExportPreset[];
   presetId: string;
-  includeEmptyAnnotations: boolean;
   exportText: string;
+  rewritePhase: AiRewritePhase;
+  rewriteProgress: number;
+  rewriteVisibleText: string;
+  rewriteSegments: RewriteDiffSegment[];
+  selectedRewriteSegmentIds: string[];
+  applyConfirmOpen: boolean;
   copied: boolean;
   busy: boolean;
-  onScopeChange: (scope: "chapter" | "book") => void;
   onTemplateChange: (template: ExportTemplate) => void;
   onTaskGoalChange: (goal: ExportTaskGoal) => void;
   onPresetChange: (presetId: string) => void;
-  onIncludeEmptyAnnotationsChange: (enabled: boolean) => void;
   onExport: () => void;
+  onAiRewrite: () => void;
+  onStopRewrite: () => void;
   onCopy: () => void;
+  onToggleRewriteSegment: (segmentId: string, selected: boolean) => void;
+  onSelectAllRewriteSegments: () => void;
+  onClearRewriteSegments: () => void;
+  onRequestApply: () => void;
+  onCancelApply: () => void;
+  onConfirmApply: () => void;
   onClose: () => void;
 }) {
   const selectedPreset = presets.find((preset) => preset.id === presetId) ?? null;
+  const hasRewriteDraft = rewriteSegments.length > 0;
+  const isGenerating = rewritePhase === "generating-markdown";
+  const isRewriting = rewritePhase === "rewriting" || rewritePhase === "revealing";
 
   return (
     <div
@@ -359,21 +397,13 @@ export function ExportModal({
       <section className="annotation-modal export-modal" onMouseDown={(event) => event.stopPropagation()}>
         <header>
           <div>
-            <p className="eyebrow">Export</p>
-            <h2>导出批注</h2>
+            <p className="eyebrow">AI Rewrite</p>
+            <h2>AI重写</h2>
           </div>
           <button className="icon-button" title="关闭" onClick={onClose}>
             <X size={18} />
           </button>
         </header>
-        <div className="segmented">
-          <button className={scope === "chapter" ? "active" : ""} onClick={() => onScopeChange("chapter")}>
-            本章
-          </button>
-          <button className={scope === "book" ? "active" : ""} onClick={() => onScopeChange("book")}>
-            全书
-          </button>
-        </div>
         <div className="export-control-grid">
           <label className="modal-field">
             Prompt 预设
@@ -420,33 +450,199 @@ export function ExportModal({
             <span>正文结构：{exportTemplateLabel(selectedPreset.baseTemplateId)}</span>
           </div>
         )}
-        <label className="export-option-row">
-          <input
-            type="checkbox"
-            checked={includeEmptyAnnotations}
-            onChange={(event) => onIncludeEmptyAnnotationsChange(event.target.checked)}
-          />
-          导出空批注
-        </label>
         <div className="modal-actions export-actions">
           <button onClick={onExport} disabled={busy}>
             <FileText size={16} />
-            生成 Markdown
+            {isGenerating ? "生成中" : "生成 Markdown"}
+          </button>
+          <button
+            className={isRewriting ? "danger" : "primary-button"}
+            onClick={isRewriting ? onStopRewrite : onAiRewrite}
+            disabled={isRewriting ? false : busy || !exportText.trim()}
+          >
+            {isRewriting ? <X size={16} /> : <WandSparkles size={16} />}
+            {isRewriting ? "停止" : "AI重写"}
           </button>
           <button onClick={onCopy} disabled={!exportText}>
             {copied ? <Check size={16} /> : <Copy size={16} />}
-            {copied ? "已复制" : "复制"}
+            {copied ? "已复制" : "复制修改包"}
           </button>
         </div>
-        <textarea
-          className="export-output"
-          value={exportText}
-          readOnly
-          placeholder="生成后的 Markdown 会显示在这里"
-          aria-label="导出内容"
-        />
+        {isRewriting && (
+          <div className="ai-rewrite-progress" role="status" aria-live="polite">
+            <div>
+              <strong>{rewritePhase === "revealing" ? "整理重写稿" : "正在请求 AI"}</strong>
+              <span>{Math.round(rewriteProgress)}%</span>
+            </div>
+            <i aria-hidden="true">
+              <b style={{ width: `${rewriteProgress}%` }} />
+            </i>
+            {rewriteVisibleText && (
+              <pre className="rewrite-draft-stream">
+                {rewriteVisibleText.split("\n").map((line, index) => (
+                  <code key={`${index}-${line}`}>{line || " "}</code>
+                ))}
+              </pre>
+            )}
+          </div>
+        )}
+        {hasRewriteDraft ? (
+          <AiRewriteDiffPreview
+            segments={rewriteSegments}
+            selectedSegmentIds={selectedRewriteSegmentIds}
+            applyConfirmOpen={applyConfirmOpen}
+            busy={busy}
+            onToggleSegment={onToggleRewriteSegment}
+            onSelectAll={onSelectAllRewriteSegments}
+            onClear={onClearRewriteSegments}
+            onRequestApply={onRequestApply}
+            onCancelApply={onCancelApply}
+            onConfirmApply={onConfirmApply}
+          />
+        ) : (
+          <textarea
+            className="export-output"
+            value={exportText}
+            readOnly
+            placeholder="先生成当前章节的 Markdown 修改包，再发起 AI 重写"
+            aria-label="AI重写修改包"
+          />
+        )}
       </section>
     </div>
+  );
+}
+
+function AiRewriteDiffPreview({
+  segments,
+  selectedSegmentIds,
+  applyConfirmOpen,
+  busy,
+  onToggleSegment,
+  onSelectAll,
+  onClear,
+  onRequestApply,
+  onCancelApply,
+  onConfirmApply,
+}: {
+  segments: RewriteDiffSegment[];
+  selectedSegmentIds: string[];
+  applyConfirmOpen: boolean;
+  busy: boolean;
+  onToggleSegment: (segmentId: string, selected: boolean) => void;
+  onSelectAll: () => void;
+  onClear: () => void;
+  onRequestApply: () => void;
+  onCancelApply: () => void;
+  onConfirmApply: () => void;
+}) {
+  const selectedSet = new Set(selectedSegmentIds);
+  const selectedCount = segments.filter((segment) => selectedSet.has(segment.id)).length;
+
+  return (
+    <div className="rewrite-diff-preview">
+      <div className="rewrite-diff-toolbar">
+        <div>
+          <strong>
+            <GitCompare size={16} /> 草稿 Diff
+          </strong>
+          <small>
+            已选择 {selectedCount}/{segments.length} 个变化块替换，取消勾选将保留原文。
+          </small>
+        </div>
+        <div className="rewrite-diff-toolbar-actions">
+          <button
+            className="rewrite-action-button primary"
+            onClick={onSelectAll}
+            disabled={busy || segments.length === 0}
+          >
+            <Check size={15} /> 全部替换
+          </button>
+          <button className="rewrite-action-button" onClick={onClear} disabled={busy || segments.length === 0}>
+            <RotateCcw size={15} /> 全部保留原文
+          </button>
+        </div>
+      </div>
+      {segments.length ? (
+        <div className="rewrite-diff-list">
+          {segments.map((segment) => {
+            const selected = selectedSet.has(segment.id);
+            return (
+              <article key={segment.id} className={`rewrite-diff-block ${segment.type} ${selected ? "selected" : ""}`}>
+                <header>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      onChange={(event) => onToggleSegment(segment.id, event.target.checked)}
+                      disabled={busy}
+                    />
+                    <span>{selected ? "替换" : "保留原文"}</span>
+                  </label>
+                  <small>
+                    {diffBlockLabel(segment.type)} · 原 {segment.oldStart} / 新 {segment.newStart}
+                  </small>
+                </header>
+                <div className="rewrite-diff-columns">
+                  <DiffColumn title="原文" lines={segment.oldLines} emptyText="没有原文行" tone="old" />
+                  <DiffColumn title="重写稿" lines={segment.newLines} emptyText="没有重写行" tone="new" />
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="muted">重写稿与原文一致。</p>
+      )}
+      {applyConfirmOpen && (
+        <div className="rewrite-apply-confirm" role="alertdialog" aria-modal="false">
+          <div>
+            <strong>确认应用到原文？</strong>
+            <small>会覆盖当前章节的 Markdown 文件，并立即生成新的章节版本快照。</small>
+          </div>
+          <div className="rewrite-confirm-actions">
+            <button className="rewrite-action-button" onClick={onCancelApply} disabled={busy}>
+              <X size={15} /> 取消
+            </button>
+            <button className="rewrite-action-button danger" onClick={onConfirmApply} disabled={busy}>
+              <Replace size={15} /> 确定应用
+            </button>
+          </div>
+        </div>
+      )}
+      <div className="modal-actions rewrite-apply-actions">
+        <button className="primary-button" onClick={onRequestApply} disabled={busy || segments.length === 0}>
+          <Replace size={16} /> 应用到原文
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function DiffColumn({
+  title,
+  lines,
+  emptyText,
+  tone,
+}: {
+  title: string;
+  lines: string[];
+  emptyText: string;
+  tone: "old" | "new";
+}) {
+  return (
+    <section className={`rewrite-diff-column ${tone}`}>
+      <strong>{title}</strong>
+      {lines.length ? (
+        <pre>
+          {lines.map((line, index) => (
+            <code key={`${index}-${line}`}>{line || " "}</code>
+          ))}
+        </pre>
+      ) : (
+        <p>{emptyText}</p>
+      )}
+    </section>
   );
 }
 
@@ -786,6 +982,15 @@ function exportTemplateLabel(templateId: ExportTemplate) {
     "annotation-index": "全书批注索引",
   };
   return labels[templateId];
+}
+
+function diffBlockLabel(type: DiffBlockType) {
+  const labels: Record<DiffBlockType, string> = {
+    added: "新增",
+    removed: "删除",
+    modified: "修改",
+  };
+  return labels[type];
 }
 
 function ColorSwatches({
