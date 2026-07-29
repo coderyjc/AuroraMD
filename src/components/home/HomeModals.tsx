@@ -1464,12 +1464,12 @@ export function HomeSettingsModal({
                   <div className="about-release-card">
                     <div>
                       <span>当前版本</span>
-                      <strong>v0.5.2</strong>
+                      <strong>v0.5.3</strong>
                     </div>
                     <ul>
-                      <li>Markdown 阅读器支持 Mermaid 图表、代码语法高亮和相对路径本地图片。</li>
-                      <li>新增图片预览缩放、章节列表右键菜单和划动批注。</li>
-                      <li>优化暗色主题表格边框、阅读器侧栏按钮布局和章节列表长标题显示。</li>
+                      <li>首页新增表格视图、分页和批量删除，书籍管理更适合大量文档。</li>
+                      <li>设置面板升级为分栏布局，支持首页默认视图、表格列、分页数量和随机主题。</li>
+                      <li>阅读器新增高亮变更、主界面/阅读器字体拆分，并修复划动批注等交互细节。</li>
                     </ul>
                   </div>
                   <button

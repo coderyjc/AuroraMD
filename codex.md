@@ -9,6 +9,7 @@ AuroraMD 是一个本地优先的 Markdown 桌面阅读器，用来阅读按章�
 如果重开 Codex 会话，请先读本节和下面的“开发踩坑记录”。当前项目状态以本 README 为准。
 
 - 当前版本：`v0.5.3`。
+- 当生成了新的 tag 之后，必须同步修改【主页-设置-关于】的新版本内容，入口在 `src/components/home/HomeModals.tsx` 的关于页版本卡片。
 - 当前工作区：`E:\code\github\annotaloop`。
 - 用户验证入口：`src-tauri/target/release/auroramd.exe`。完成功能或修复后，默认直接执行 `npm.cmd run tauri -- build`，不要只停在前端构建或 dev server。
 - 最近一次 release 构建输出为 `src-tauri/target/release/auroramd.exe` 和 `src-tauri/target/release/bundle/nsis/AuroraMD_0.5.3_x64-setup.exe`。
