@@ -591,7 +591,7 @@ export default function App() {
   const [sortDraft, setSortDraft] = useState<Chapter[]>([]);
   const [sortDragChapterId, setSortDragChapterId] = useState<string | null>(null);
   const [isLeftCollapsed, setIsLeftCollapsed] = useState(false);
-  const [isRightCollapsed, setIsRightCollapsed] = useState(false);
+  const [isRightCollapsed, setIsRightCollapsed] = useState(true);
   const [isReadingFullscreen, setIsReadingFullscreen] = useState(false);
   const [fullscreenReveal, setFullscreenReveal] = useState<FullscreenReveal>({
     top: false,
@@ -3757,6 +3757,9 @@ export default function App() {
       if (reader) openExportModal();
       return;
     }
+    if (action === "submit") {
+      return;
+    }
     if (action === "toggleLeft") {
       if (activeBook) setIsLeftCollapsed((value) => !value);
       return;
@@ -4170,6 +4173,7 @@ export default function App() {
             closing={renameBookClosing}
             draft={renameBookDraft}
             busy={busy}
+            submitShortcut={shortcutBindings.submit}
             onChange={(name) => setRenameBookDraft({ ...renameBookDraft, name })}
             onClose={closeRenameBookModal}
             onSave={() => void saveBookRename()}
@@ -4746,6 +4750,7 @@ export default function App() {
         <NewAnnotationModal
           closing={draftClosing}
           draft={draft}
+          submitShortcut={shortcutBindings.submit}
           onChange={setDraft}
           onCancel={closeDraftModal}
           onSave={() => void saveDraft()}
@@ -4755,6 +4760,7 @@ export default function App() {
         <AnnotationDetailModal
           closing={detailAnnotationClosing}
           annotation={detailAnnotation}
+          submitShortcut={shortcutBindings.submit}
           onClose={closeReaderAnnotationDetail}
           onDelete={() => void handleDeleteAnnotation(detailAnnotation.id)}
           onSave={(patch) => void handleUpdateAnnotation(detailAnnotation, patch)}

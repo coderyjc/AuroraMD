@@ -226,7 +226,7 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
         &conn,
         "settings",
         "shortcut_bindings",
-        "ALTER TABLE settings ADD COLUMN shortcut_bindings TEXT NOT NULL DEFAULT '{\"search\":\"Ctrl+K\",\"nextChapter\":\"N\",\"previousChapter\":\"P\",\"highlight\":\"H\",\"export\":\"E\",\"toggleLeft\":\"[\",\"toggleRight\":\"]\"}'",
+        "ALTER TABLE settings ADD COLUMN shortcut_bindings TEXT NOT NULL DEFAULT '{\"search\":\"Ctrl+K\",\"nextChapter\":\"N\",\"previousChapter\":\"P\",\"highlight\":\"H\",\"export\":\"E\",\"submit\":\"Ctrl+Enter\",\"toggleLeft\":\"[\",\"toggleRight\":\"]\"}'",
     )?;
     ensure_column(
         &conn,
@@ -385,7 +385,7 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
             ai_request_format,
             ai_api_key,
             ai_model
-        ) VALUES (1, 100, 'classic', 'paper', 'Literata, Georgia, serif', '"IBM Plex Sans", "Segoe UI", "Microsoft YaHei", sans-serif', '"IBM Plex Sans", "Segoe UI", sans-serif', '"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif', 'Literata, Georgia, serif', 'Literata, Georgia, serif', '"Noto Serif SC", "Songti SC", SimSun, serif', 18, 1.72, 820, 52, 18, 'warm', 'hairline', 0, 0, 'grid', '{"rowNumber":true,"rootPath":true,"chapterCount":true,"annotationCount":true,"createdAt":true,"lastOpenedAt":true}', 20, '{"search":"Ctrl+K","nextChapter":"N","previousChapter":"P","highlight":"H","export":"E","toggleLeft":"[","toggleRight":"]"}', 0, 30, '', '', 'openai', '', '')
+        ) VALUES (1, 100, 'classic', 'paper', 'Literata, Georgia, serif', '"IBM Plex Sans", "Segoe UI", "Microsoft YaHei", sans-serif', '"IBM Plex Sans", "Segoe UI", sans-serif', '"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif', 'Literata, Georgia, serif', 'Literata, Georgia, serif', '"Noto Serif SC", "Songti SC", SimSun, serif', 18, 1.72, 820, 52, 18, 'warm', 'hairline', 0, 0, 'grid', '{"rowNumber":true,"rootPath":true,"chapterCount":true,"annotationCount":true,"createdAt":true,"lastOpenedAt":true}', 20, '{"search":"Ctrl+K","nextChapter":"N","previousChapter":"P","highlight":"H","export":"E","submit":"Ctrl+Enter","toggleLeft":"[","toggleRight":"]"}', 0, 30, '', '', 'openai', '', '')
         "#,
         [],
     )?;

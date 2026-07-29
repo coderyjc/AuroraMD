@@ -1,6 +1,8 @@
 import { defaultShortcutBindings } from "../constants";
 import type { ShortcutAction, ShortcutBindings } from "../types";
 
+type ShortcutEvent = Pick<KeyboardEvent, "key" | "ctrlKey" | "altKey" | "shiftKey" | "metaKey">;
+
 export function parseShortcutBindings(value: string): ShortcutBindings {
   try {
     return { ...defaultShortcutBindings, ...(JSON.parse(value) as Partial<ShortcutBindings>) };
@@ -13,7 +15,7 @@ export function normalizeShortcut(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, "");
 }
 
-export function eventShortcut(event: KeyboardEvent) {
+export function eventShortcut(event: ShortcutEvent) {
   const parts = [];
   if (event.ctrlKey) parts.push("ctrl");
   if (event.altKey) parts.push("alt");
@@ -24,7 +26,11 @@ export function eventShortcut(event: KeyboardEvent) {
   return parts.join("+");
 }
 
-export function matchShortcut(event: KeyboardEvent, bindings: ShortcutBindings): ShortcutAction | null {
+export function shortcutMatchesEvent(shortcut: string, event: ShortcutEvent) {
+  return Boolean(shortcut.trim()) && normalizeShortcut(shortcut) === eventShortcut(event);
+}
+
+export function matchShortcut(event: ShortcutEvent, bindings: ShortcutBindings): ShortcutAction | null {
   const pressed = eventShortcut(event);
   for (const action of Object.keys(bindings) as ShortcutAction[]) {
     if (normalizeShortcut(bindings[action]) === pressed) return action;
@@ -46,6 +52,7 @@ export function shortcutActionLabel(action: ShortcutAction) {
     previousChapter: "上一章",
     highlight: "添加高亮",
     export: "AI重写",
+    submit: "提交",
     toggleLeft: "左栏",
     toggleRight: "右栏",
   };

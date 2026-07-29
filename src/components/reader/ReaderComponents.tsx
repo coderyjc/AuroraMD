@@ -16,7 +16,7 @@ import {
   WandSparkles,
   X,
 } from "lucide-react";
-import { type MouseEvent as ReactMouseEvent, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, useEffect, useRef, useState } from "react";
 
 import { FontPicker } from "../FontPicker";
 import { highlightColors } from "../../constants";
@@ -32,6 +32,7 @@ import type {
 } from "../../types";
 import { chapterFileName } from "../../utils/chapters";
 import type { DiffBlockType } from "../../utils/diff";
+import { shortcutMatchesEvent } from "../../utils/shortcuts";
 
 export interface SelectionDraft {
   selectedText: string;
@@ -649,16 +650,26 @@ function DiffColumn({
 export function NewAnnotationModal({
   closing,
   draft,
+  submitShortcut,
   onChange,
   onCancel,
   onSave,
 }: {
   closing: boolean;
   draft: SelectionDraft;
+  submitShortcut: string;
   onChange: (draft: SelectionDraft) => void;
   onCancel: () => void;
   onSave: () => void;
 }) {
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if ((event.nativeEvent as KeyboardEvent).isComposing) return;
+    if (!shortcutMatchesEvent(submitShortcut, event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onSave();
+  };
+
   return (
     <div
       className={`modal-backdrop ${closing ? "is-closing" : ""}`}
@@ -668,7 +679,11 @@ export function NewAnnotationModal({
         }
       }}
     >
-      <section className="annotation-modal" onMouseDown={(event) => event.stopPropagation()}>
+      <section
+        className="annotation-modal"
+        onKeyDown={handleKeyDown}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
         <header>
           <div>
             <p className="eyebrow">New Note</p>
@@ -704,23 +719,34 @@ export function NewAnnotationModal({
 export function AnnotationDetailModal({
   closing,
   annotation,
+  submitShortcut,
   onClose,
   onDelete,
   onSave,
 }: {
   closing: boolean;
   annotation: Annotation;
+  submitShortcut: string;
   onClose: () => void;
   onDelete: () => void;
   onSave: (patch: Partial<Annotation>) => void;
 }) {
   const [comment, setComment] = useState(annotation.comment);
   const [highlightColor, setHighlightColor] = useState(annotation.highlightColor);
+  const submitPatch = () => onSave({ comment, highlightColor });
 
   useEffect(() => {
     setComment(annotation.comment);
     setHighlightColor(annotation.highlightColor);
   }, [annotation]);
+
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if ((event.nativeEvent as KeyboardEvent).isComposing) return;
+    if (!shortcutMatchesEvent(submitShortcut, event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    submitPatch();
+  };
 
   return (
     <div
@@ -731,7 +757,11 @@ export function AnnotationDetailModal({
         }
       }}
     >
-      <section className="annotation-modal detail" onMouseDown={(event) => event.stopPropagation()}>
+      <section
+        className="annotation-modal detail"
+        onKeyDown={handleKeyDown}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
         <header>
           <div>
             <p className="eyebrow">Note Detail</p>
@@ -753,7 +783,7 @@ export function AnnotationDetailModal({
             <Trash2 size={16} />
             删除
           </button>
-          <button className="primary-button" onClick={() => onSave({ comment, highlightColor })}>
+          <button className="primary-button" onClick={submitPatch}>
             <Save size={17} />
             保存
           </button>

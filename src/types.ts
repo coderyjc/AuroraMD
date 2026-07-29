@@ -271,6 +271,7 @@ export type ShortcutAction =
   | "previousChapter"
   | "highlight"
   | "export"
+  | "submit"
   | "toggleLeft"
   | "toggleRight";
 

@@ -653,6 +653,7 @@ export const defaultShortcutBindings: ShortcutBindings = {
   previousChapter: "P",
   highlight: "H",
   export: "E",
+  submit: "Ctrl+Enter",
   toggleLeft: "[",
   toggleRight: "]",
 };

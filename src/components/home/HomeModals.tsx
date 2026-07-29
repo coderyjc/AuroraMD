@@ -51,7 +51,7 @@ import type {
 import { annotationStatusLabel } from "../../utils/annotations";
 import { chapterFileName } from "../../utils/chapters";
 import { type DiffBlock, diffMarkdownLines } from "../../utils/diff";
-import { parseShortcutBindings, shortcutActionLabel } from "../../utils/shortcuts";
+import { parseShortcutBindings, shortcutActionLabel, shortcutMatchesEvent } from "../../utils/shortcuts";
 
 interface ContextMenuState {
   x: number;
@@ -247,6 +247,7 @@ export function RenameBookModal({
   closing,
   draft,
   busy,
+  submitShortcut,
   onChange,
   onClose,
   onSave,
@@ -254,16 +255,29 @@ export function RenameBookModal({
   closing: boolean;
   draft: RenameBookState;
   busy: boolean;
+  submitShortcut: string;
   onChange: (name: string) => void;
   onClose: () => void;
   onSave: () => void;
 }) {
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if ((event.nativeEvent as KeyboardEvent).isComposing) return;
+    if (!shortcutMatchesEvent(submitShortcut, event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!busy && draft.name.trim()) onSave();
+  };
+
   return (
     <div
       className={`modal-backdrop ${closing ? "is-closing" : ""}`}
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
     >
-      <section className="annotation-modal compact-modal" onMouseDown={(event) => event.stopPropagation()}>
+      <section
+        className="annotation-modal compact-modal"
+        onKeyDown={handleKeyDown}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
         <header>
           <div>
             <p className="eyebrow">Book</p>
