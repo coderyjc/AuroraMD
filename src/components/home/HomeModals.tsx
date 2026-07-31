@@ -1,4 +1,4 @@
-import { AlertTriangle, Archive, ArrowRight, BookOpen, Check, ChevronLeft, ChevronRight, Copy, Database, Download, FileText, FolderOpen, Github, GripVertical, Keyboard, List, MessageSquare, Palette, Pencil, Pin, PinOff, Plus, RefreshCw, Save, Search, Trash2, Type, Upload, WandSparkles, X } from "lucide-react";
+import { AlertTriangle, Archive, ArrowRight, BookOpen, Check, ChevronLeft, ChevronRight, Copy, Database, Download, FileText, FolderOpen, Github, GripVertical, Highlighter, Keyboard, List, MessageSquare, Palette, Pencil, Pin, PinOff, Plus, RefreshCw, Save, Search, Trash2, Type, Upload, WandSparkles, X } from "lucide-react";
 import { type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   deleteChapter,
@@ -15,6 +15,8 @@ import {
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   defaultHomeTableColumns,
+  highlightColors as defaultHighlightColors,
+  highlightPaletteSize,
   defaultShortcutBindings,
   getEffectiveThemeSeries,
   getDefaultThemeForSeries,
@@ -51,6 +53,17 @@ import type {
 import { annotationStatusLabel } from "../../utils/annotations";
 import { chapterFileName } from "../../utils/chapters";
 import { type DiffBlock, diffMarkdownLines } from "../../utils/diff";
+import {
+  composeHighlightColor,
+  createHighlightPenbox,
+  type HighlightPenbox,
+  hexToHsv,
+  hsvToHex,
+  normalizeHexColor,
+  parseHighlightPenboxSettings,
+  readHighlightColorParts,
+  serializeHighlightPenboxSettings,
+} from "../../utils/highlights";
 import { parseShortcutBindings, shortcutActionLabel, shortcutMatchesEvent } from "../../utils/shortcuts";
 
 interface ContextMenuState {
@@ -86,6 +99,8 @@ interface VersionDiffResult {
 }
 
 type HomeSettingsCategory = "appearance" | "features" | "shortcuts" | "prompts" | "backup" | "about";
+type HighlightPenboxEditorMode = "create" | "edit";
+type HighlightPenboxDraft = HighlightPenbox & { mode: HighlightPenboxEditorMode };
 
 const themeSkinPageSize = 6;
 
@@ -464,6 +479,7 @@ export function ImportBookModal({
   bookName,
   selectedFilePaths,
   busy,
+  submitShortcut,
   onBookNameChange,
   onSelectionChange,
   onClose,
@@ -474,6 +490,7 @@ export function ImportBookModal({
   bookName: string;
   selectedFilePaths: string[];
   busy: boolean;
+  submitShortcut: string;
   onBookNameChange: (name: string) => void;
   onSelectionChange: (paths: string[]) => void;
   onClose: () => void;
@@ -482,9 +499,18 @@ export function ImportBookModal({
   const selectedSet = useMemo(() => new Set(selectedFilePaths), [selectedFilePaths]);
   const tree = useMemo(() => buildImportTree(preview.files), [preview.files]);
   const selectedCount = preview.files.filter((file) => selectedSet.has(file.path)).length;
+  const canImport = !busy && selectedCount > 0 && Boolean(bookName.trim());
 
   const normalizeSelection = (nextSet: Set<string>) =>
     preview.files.filter((file) => nextSet.has(file.path)).map((file) => file.path);
+
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if ((event.nativeEvent as KeyboardEvent).isComposing) return;
+    if (!shortcutMatchesEvent(submitShortcut, event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (canImport) onImport();
+  };
 
   const toggleFile = (path: string, checked: boolean) => {
     const nextSet = new Set(selectedSet);
@@ -513,7 +539,11 @@ export function ImportBookModal({
       className={`modal-backdrop ${closing ? "is-closing" : ""}`}
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
     >
-      <section className="annotation-modal import-book-modal" onMouseDown={(event) => event.stopPropagation()}>
+      <section
+        className="annotation-modal import-book-modal"
+        onKeyDown={handleKeyDown}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
         <header>
           <div>
             <p className="eyebrow">Import</p>
@@ -574,7 +604,7 @@ export function ImportBookModal({
           <button
             className="primary-button"
             onClick={onImport}
-            disabled={busy || selectedCount === 0 || !bookName.trim()}
+            disabled={!canImport}
           >
             <Save size={16} /> 导入选中文件
           </button>
@@ -806,6 +836,7 @@ export function HomeSettingsModal({
   const [presetDraft, setPresetDraft] = useState<ExportPresetPayload>(emptyExportPresetDraft);
   const [recordingAction, setRecordingAction] = useState<ShortcutAction | null>(null);
   const [activeCategory, setActiveCategory] = useState<HomeSettingsCategory>("appearance");
+  const [highlightPenboxDraft, setHighlightPenboxDraft] = useState<HighlightPenboxDraft | null>(null);
   const [themeSkinPage, setThemeSkinPage] = useState(0);
   const bindings = parseShortcutBindings(settings.shortcutBindings);
   const settingsCategories = [
@@ -817,9 +848,9 @@ export function HomeSettingsModal({
     },
     {
       id: "features",
-      label: "功能",
-      description: "阅读批注",
-      icon: <MessageSquare size={16} />,
+      label: "批注功能",
+      description: "批注与荧光笔",
+      icon: <Highlighter size={16} />,
     },
     {
       id: "shortcuts",
@@ -896,6 +927,14 @@ export function HomeSettingsModal({
     }
   };
   const tableColumns = parseHomeTableColumns(settings.homeTableColumns);
+  const highlightPenboxSettings = useMemo(
+    () => parseHighlightPenboxSettings(settings.highlightColors),
+    [settings.highlightColors],
+  );
+  const activeHighlightPenbox =
+    highlightPenboxSettings.penboxes.find(
+      (penbox) => penbox.id === highlightPenboxSettings.activePenboxId,
+    ) ?? highlightPenboxSettings.penboxes[0];
   const effectiveAutoBackupDirectory =
     settings.autoBackupDirectory.trim() ||
     defaultAutoBackupDirectory ||
@@ -906,6 +945,59 @@ export function HomeSettingsModal({
         ...tableColumns,
         [column]: visible,
       }),
+    });
+  };
+  const saveHighlightPenboxSettings = (nextSettings: typeof highlightPenboxSettings) => {
+    onChange({ highlightColors: serializeHighlightPenboxSettings(nextSettings) });
+  };
+  const setActiveHighlightPenbox = (penboxId: string) => {
+    saveHighlightPenboxSettings({ ...highlightPenboxSettings, activePenboxId: penboxId });
+  };
+  const openHighlightPenboxCreator = () => {
+    setHighlightPenboxDraft({
+      ...createHighlightPenbox(`笔盒 ${highlightPenboxSettings.penboxes.length + 1}`),
+      mode: "create",
+    });
+  };
+  const openHighlightPenboxEditor = (penbox: HighlightPenbox) => {
+    setHighlightPenboxDraft({
+      ...penbox,
+      colors: [...penbox.colors],
+      mode: "edit",
+    });
+  };
+  const saveHighlightPenbox = (draft: HighlightPenbox) => {
+    const nextPenbox = {
+      ...draft,
+      name: draft.name.trim() || "未命名笔盒",
+    };
+    const penboxes =
+      highlightPenboxDraft?.mode === "create"
+        ? [...highlightPenboxSettings.penboxes, nextPenbox]
+        : highlightPenboxSettings.penboxes.map((penbox) =>
+            penbox.id === nextPenbox.id ? nextPenbox : penbox,
+          );
+    saveHighlightPenboxSettings({
+      activePenboxId: nextPenbox.id,
+      penboxes,
+    });
+    setHighlightPenboxDraft(null);
+  };
+  const deleteHighlightPenbox = (penboxId: string) => {
+    if (highlightPenboxSettings.penboxes.length <= 1) return;
+    const penboxes = highlightPenboxSettings.penboxes.filter((penbox) => penbox.id !== penboxId);
+    saveHighlightPenboxSettings({
+      activePenboxId:
+        highlightPenboxSettings.activePenboxId === penboxId
+          ? penboxes[0].id
+          : highlightPenboxSettings.activePenboxId,
+      penboxes,
+    });
+  };
+  const resetHighlightColors = () => {
+    saveHighlightPenboxSettings({
+      activePenboxId: "default",
+      penboxes: [{ id: "default", name: "默认笔盒", colors: defaultHighlightColors }],
     });
   };
 
@@ -977,11 +1069,12 @@ export function HomeSettingsModal({
   };
 
   return (
-    <div
-      className={`modal-backdrop ${closing ? "is-closing" : ""}`}
-      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
-    >
-      <section className="annotation-modal home-settings-modal" onMouseDown={(event) => event.stopPropagation()}>
+    <>
+      <div
+        className={`modal-backdrop ${closing ? "is-closing" : ""}`}
+        onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+      >
+        <section className="annotation-modal home-settings-modal" onMouseDown={(event) => event.stopPropagation()}>
         <header>
           <div>
             <p className="eyebrow">Global Settings</p>
@@ -1258,6 +1351,68 @@ export function HomeSettingsModal({
                     />
                     <i aria-hidden="true" />
                   </label>
+                </section>
+                <section className="settings-section">
+                  <div className="settings-section-heading">
+                    <h3>
+                      <Highlighter size={16} /> 荧光笔
+                    </h3>
+                    <div className="highlight-penbox-actions">
+                      <button type="button" className="luck-theme-button" onClick={openHighlightPenboxCreator}>
+                        <Plus size={15} />
+                        添加笔盒
+                      </button>
+                      <button type="button" className="luck-theme-button" onClick={resetHighlightColors}>
+                        <RefreshCw size={15} />
+                        恢复默认
+                      </button>
+                    </div>
+                  </div>
+                  <div className="highlight-penbox-summary">
+                    <span>
+                      <strong>当前笔盒</strong>
+                      <small>{activeHighlightPenbox.name}</small>
+                    </span>
+                    <HighlightPenboxSwatches colors={activeHighlightPenbox.colors} />
+                  </div>
+                  <div className="highlight-penbox-list" aria-label="荧光笔笔盒">
+                    {highlightPenboxSettings.penboxes.map((penbox) => (
+                      <article
+                        key={penbox.id}
+                        className={`highlight-penbox-card ${
+                          penbox.id === highlightPenboxSettings.activePenboxId ? "active" : ""
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          className="highlight-penbox-select"
+                          onClick={() => setActiveHighlightPenbox(penbox.id)}
+                        >
+                          <span>
+                            <strong>{penbox.name}</strong>
+                            <small>
+                              {penbox.id === highlightPenboxSettings.activePenboxId ? "正在使用" : "点击启用"}
+                            </small>
+                          </span>
+                          <HighlightPenboxSwatches colors={penbox.colors} />
+                        </button>
+                        <div className="highlight-penbox-card-actions">
+                          <button type="button" className="icon-button small" title="修改笔盒" onClick={() => openHighlightPenboxEditor(penbox)}>
+                            <Pencil size={15} />
+                          </button>
+                          <button
+                            type="button"
+                            className="icon-button small danger"
+                            title="删除笔盒"
+                            disabled={highlightPenboxSettings.penboxes.length <= 1}
+                            onClick={() => deleteHighlightPenbox(penbox.id)}
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
                 </section>
               </div>
             )}
@@ -1553,8 +1708,236 @@ export function HomeSettingsModal({
             )}
           </main>
         </div>
+        </section>
+      </div>
+      {highlightPenboxDraft && (
+        <HighlightPenboxModal
+          draft={highlightPenboxDraft}
+          onCancel={() => setHighlightPenboxDraft(null)}
+          onSave={saveHighlightPenbox}
+        />
+      )}
+    </>
+  );
+}
+
+function HighlightPenboxSwatches({ colors }: { colors: string[] }) {
+  return (
+    <div className="highlight-penbox-swatches" aria-hidden="true">
+      {Array.from({ length: highlightPaletteSize }, (_, index) => (
+        <span
+          key={`${index}-${colors[index]}`}
+          style={{ "--highlight-color": colors[index] ?? defaultHighlightColors[index] } as CSSProperties}
+        />
+      ))}
+    </div>
+  );
+}
+
+function HighlightPenboxModal({
+  draft,
+  onCancel,
+  onSave,
+}: {
+  draft: HighlightPenboxDraft;
+  onCancel: () => void;
+  onSave: (draft: HighlightPenbox) => void;
+}) {
+  const [name, setName] = useState(draft.name);
+  const [colors, setColors] = useState(draft.colors);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const activeColor = colors[activeIndex] ?? defaultHighlightColors[activeIndex] ?? defaultHighlightColors[0];
+
+  useEffect(() => {
+    setName(draft.name);
+    setColors([...draft.colors]);
+    setActiveIndex(0);
+  }, [draft]);
+
+  const updateColor = (index: number, color: string) => {
+    setColors((current) =>
+      Array.from({ length: highlightPaletteSize }, (_, colorIndex) =>
+        colorIndex === index
+          ? color
+          : current[colorIndex] ?? defaultHighlightColors[colorIndex] ?? defaultHighlightColors[0],
+      ),
+    );
+  };
+
+  const submit = () => {
+    onSave({
+      id: draft.id,
+      name,
+      colors,
+    });
+  };
+
+  return (
+    <div
+      className="modal-backdrop nested-modal-backdrop highlight-penbox-modal-backdrop"
+      onMouseDown={(event) => event.target === event.currentTarget && onCancel()}
+    >
+      <section className="annotation-modal highlight-penbox-modal" onMouseDown={(event) => event.stopPropagation()}>
+        <header>
+          <div>
+            <p className="eyebrow">{draft.mode === "create" ? "New Penbox" : "Edit Penbox"}</p>
+            <h2>{draft.mode === "create" ? "添加笔盒" : "修改笔盒"}</h2>
+          </div>
+          <button className="icon-button" onClick={onCancel} title="关闭">
+            <X size={18} />
+          </button>
+        </header>
+        <label className="highlight-penbox-name-field">
+          <span>笔盒名称</span>
+          <input value={name} onChange={(event) => setName(event.target.value)} autoFocus />
+        </label>
+        <div className="highlight-penbox-modal-body">
+          <aside className="highlight-penbox-slot-list" aria-label="笔盒色位">
+            {Array.from({ length: highlightPaletteSize }, (_, index) => (
+              <button
+                key={index}
+                type="button"
+                className={index === activeIndex ? "active" : ""}
+                onClick={() => setActiveIndex(index)}
+              >
+                <span
+                  className="highlight-slot-preview"
+                  style={{ "--highlight-color": colors[index] ?? defaultHighlightColors[index] } as CSSProperties}
+                />
+                <strong>色位 {index + 1}</strong>
+                {index === activeIndex && <Check size={15} />}
+              </button>
+            ))}
+          </aside>
+          <div className="highlight-penbox-editor-panel">
+            <HighlightColorSlot
+              key={activeIndex}
+              index={activeIndex}
+              color={activeColor}
+              onChange={(color) => updateColor(activeIndex, color)}
+            />
+          </div>
+        </div>
+        <div className="modal-actions">
+          <button type="button" onClick={onCancel}>
+            取消
+          </button>
+          <button type="button" className="primary-button" onClick={submit} disabled={!name.trim()}>
+            <Save size={16} />
+            保存笔盒
+          </button>
+        </div>
       </section>
     </div>
+  );
+}
+
+function HighlightColorSlot({
+  index,
+  color,
+  onChange,
+}: {
+  index: number;
+  color: string;
+  onChange: (color: string) => void;
+}) {
+  const fallback = defaultHighlightColors[index] ?? defaultHighlightColors[0];
+  const parts = readHighlightColorParts(color, fallback);
+  const hsv = hexToHsv(parts.hex);
+  const [hexDraft, setHexDraft] = useState(parts.hex);
+  const planeStyle = {
+    "--highlight-color": parts.css,
+    "--highlight-hue": String(Math.round(hsv.hue)),
+  } as CSSProperties;
+  const markerStyle = {
+    left: `${hsv.saturation * 100}%`,
+    top: `${(1 - hsv.value) * 100}%`,
+  };
+
+  useEffect(() => {
+    setHexDraft(parts.hex);
+  }, [parts.hex]);
+
+  const updateColor = (hex: string, alpha = parts.alpha) => {
+    onChange(composeHighlightColor(hex, alpha));
+  };
+
+  const updateFromPlane = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const saturation = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+    const value = Math.min(1, Math.max(0, 1 - (event.clientY - rect.top) / rect.height));
+    updateColor(hsvToHex(hsv.hue, saturation, value));
+  };
+
+  const updateHexDraft = (value: string) => {
+    setHexDraft(value);
+    const normalized = normalizeHexColor(value);
+    if (normalized) updateColor(normalized);
+  };
+
+  return (
+    <article className="highlight-color-slot" style={planeStyle}>
+      <div className="highlight-slot-heading">
+        <span className="highlight-slot-preview" aria-hidden="true" />
+        <strong>色位 {index + 1}</strong>
+      </div>
+      <div
+        className="highlight-color-plane"
+        role="application"
+        aria-label={`色位 ${index + 1} 二维色板`}
+        onPointerDown={(event) => {
+          event.currentTarget.setPointerCapture(event.pointerId);
+          updateFromPlane(event);
+        }}
+        onPointerMove={(event) => {
+          if (event.buttons === 1) updateFromPlane(event);
+        }}
+      >
+        <i style={markerStyle} />
+      </div>
+      <div className="highlight-color-controls">
+        <label className="highlight-native-picker">
+          <span>取色器</span>
+          <input type="color" value={parts.hex} onChange={(event) => updateColor(event.target.value)} />
+        </label>
+        <label className="highlight-hex-field">
+          <span>Hex</span>
+          <input
+            value={hexDraft}
+            spellCheck={false}
+            onChange={(event) => updateHexDraft(event.target.value)}
+            onBlur={() => {
+              if (!normalizeHexColor(hexDraft)) setHexDraft(parts.hex);
+            }}
+          />
+        </label>
+      </div>
+      <label className="highlight-range-field hue">
+        <span>Hue</span>
+        <input
+          type="range"
+          min={0}
+          max={360}
+          step={1}
+          value={Math.round(hsv.hue)}
+          onChange={(event) =>
+            updateColor(hsvToHex(Number(event.target.value), hsv.saturation, hsv.value))
+          }
+        />
+      </label>
+      <label className="highlight-range-field alpha">
+        <span>透明度</span>
+        <input
+          type="range"
+          min={0.08}
+          max={1}
+          step={0.01}
+          value={parts.alpha}
+          onChange={(event) => updateColor(parts.hex, Number(event.target.value))}
+        />
+        <strong>{Math.round(parts.alpha * 100)}%</strong>
+      </label>
+    </article>
   );
 }
 

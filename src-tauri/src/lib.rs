@@ -1,7 +1,7 @@
 use futures_util::future::{select, Either};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -2208,6 +2208,26 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
         } else {
             Ok(())
         };
+    let highlight_colors_restore_result =
+        if restore_result.is_ok() && backup_has_column(&conn, "settings", "highlight_colors")? {
+            conn.execute_batch(
+                r#"
+            UPDATE settings
+            SET highlight_colors = (
+                SELECT highlight_colors
+                FROM backup.settings
+                WHERE backup.settings.id = settings.id
+            )
+            WHERE EXISTS (
+                SELECT 1
+                FROM backup.settings
+                WHERE backup.settings.id = settings.id
+            );
+            "#,
+            )
+        } else {
+            Ok(())
+        };
     let theme_series_restore_result =
         if restore_result.is_ok() && backup_has_column(&conn, "settings", "theme_series")? {
             conn.execute_batch(
@@ -2542,6 +2562,8 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
         .map_err(|error| format!("Failed to restore focus mode setting: {error}"))?;
     slide_annotate_restore_result
         .map_err(|error| format!("Failed to restore slide annotation setting: {error}"))?;
+    highlight_colors_restore_result
+        .map_err(|error| format!("Failed to restore highlight color settings: {error}"))?;
     theme_series_restore_result
         .map_err(|error| format!("Failed to restore theme series setting: {error}"))?;
     home_view_restore_result
@@ -2686,6 +2708,11 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
         .unwrap_or(current.ai_model)
         .trim()
         .to_string();
+    let next_highlight_colors = patch
+        .highlight_colors
+        .unwrap_or(current.highlight_colors)
+        .trim()
+        .to_string();
     conn.execute(
         r#"
         UPDATE settings
@@ -2709,17 +2736,18 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
             border_style = ?16,
             focus_mode = ?17,
             slide_annotate = ?18,
-            home_default_view = ?19,
-            home_table_columns = ?20,
-            home_page_size = ?21,
-            shortcut_bindings = ?22,
-            auto_backup_enabled = ?23,
-            auto_backup_interval_minutes = ?24,
-            auto_backup_directory = ?25,
-            ai_base_url = ?26,
-            ai_request_format = ?27,
-            ai_api_key = ?28,
-            ai_model = ?29
+            highlight_colors = ?19,
+            home_default_view = ?20,
+            home_table_columns = ?21,
+            home_page_size = ?22,
+            shortcut_bindings = ?23,
+            auto_backup_enabled = ?24,
+            auto_backup_interval_minutes = ?25,
+            auto_backup_directory = ?26,
+            ai_base_url = ?27,
+            ai_request_format = ?28,
+            ai_api_key = ?29,
+            ai_model = ?30
         WHERE id = 1
         "#,
         params![
@@ -2743,6 +2771,7 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
             patch.border_style.unwrap_or(current.border_style),
             patch.focus_mode.unwrap_or(current.focus_mode),
             patch.slide_annotate.unwrap_or(current.slide_annotate),
+            next_highlight_colors,
             patch.home_default_view.unwrap_or(current.home_default_view),
             patch
                 .home_table_columns
@@ -3082,18 +3111,11 @@ fn list_reading_progress(
     let rows = stmt
         .query_map(params![book_id], map_reading_progress)
         .map_err(db_error)?;
-    let mut chapter_indexes: HashMap<String, usize> = HashMap::new();
+    let mut seen_chapter_ids: HashSet<String> = HashSet::new();
     let mut progress: Vec<ReadingProgress> = Vec::new();
     for row in rows {
         let item = row.map_err(db_error)?;
-        if let Some(index) = chapter_indexes.get(&item.chapter_id).copied() {
-            if is_reading_progress_complete(item.progress_ratio)
-                && !is_reading_progress_complete(progress[index].progress_ratio)
-            {
-                progress[index] = item;
-            }
-        } else {
-            chapter_indexes.insert(item.chapter_id.clone(), progress.len());
+        if seen_chapter_ids.insert(item.chapter_id.clone()) {
             progress.push(item);
         }
     }
@@ -3118,10 +3140,6 @@ fn normalize_reading_progress_ratio(progress_ratio: f64) -> f64 {
     } else {
         clamped
     }
-}
-
-fn is_reading_progress_complete(progress_ratio: f64) -> bool {
-    progress_ratio >= READING_PROGRESS_COMPLETE_THRESHOLD
 }
 
 fn map_reading_progress(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReadingProgress> {
@@ -3883,6 +3901,7 @@ fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
             border_style,
             focus_mode,
             slide_annotate,
+            highlight_colors,
             home_default_view,
             home_table_columns,
             home_page_size,
@@ -3918,17 +3937,18 @@ fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
                 border_style: row.get(15)?,
                 focus_mode: row.get(16)?,
                 slide_annotate: row.get(17)?,
-                home_default_view: row.get(18)?,
-                home_table_columns: row.get(19)?,
-                home_page_size: row.get(20)?,
-                shortcut_bindings: row.get(21)?,
-                auto_backup_enabled: row.get(22)?,
-                auto_backup_interval_minutes: row.get(23)?,
-                auto_backup_directory: row.get(24)?,
-                ai_base_url: row.get(25)?,
-                ai_request_format: row.get(26)?,
-                ai_api_key: row.get(27)?,
-                ai_model: row.get(28)?,
+                highlight_colors: row.get(18)?,
+                home_default_view: row.get(19)?,
+                home_table_columns: row.get(20)?,
+                home_page_size: row.get(21)?,
+                shortcut_bindings: row.get(22)?,
+                auto_backup_enabled: row.get(23)?,
+                auto_backup_interval_minutes: row.get(24)?,
+                auto_backup_directory: row.get(25)?,
+                ai_base_url: row.get(26)?,
+                ai_request_format: row.get(27)?,
+                ai_api_key: row.get(28)?,
+                ai_model: row.get(29)?,
             })
         },
     )

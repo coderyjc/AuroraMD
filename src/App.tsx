@@ -121,7 +121,6 @@ import {
   defaultSettings,
   getDefaultThemeForSeries,
   getEffectiveThemeSeries,
-  highlightColors,
   homePageSizeOptions,
 } from "./constants";
 import {
@@ -164,6 +163,7 @@ import type {
 } from "./types";
 import { chapterFileName } from "./utils/chapters";
 import { diffMarkdownLines } from "./utils/diff";
+import { parseHighlightPalette } from "./utils/highlights";
 import { matchShortcut, parseShortcutBindings, shouldIgnoreShortcut } from "./utils/shortcuts";
 
 interface ContextMenuState {
@@ -284,6 +284,10 @@ const initialWindowHeightRatio = 0.82;
 const initialWindowMinWidth = 980;
 const initialWindowMinHeight = 680;
 const initialWindowEdgePaddingPx = 32;
+const markdownOverflowWrapperSelector =
+  ".markdown-overflow-frame[data-overflow-wrapper='true']";
+const markdownOverflowBlockSelector = "p, blockquote, h1, h2, h3, h4, h5, h6";
+const markdownOverflowTolerancePx = 2;
 
 interface WindowPlacementBounds {
   x: number;
@@ -302,6 +306,108 @@ interface WindowPlacementMonitor {
     position: PhysicalPosition;
     size: PhysicalSize;
   };
+}
+
+interface ChapterReadChoice {
+  reader: ReadChapterResponse;
+  scrollTop: number;
+  rememberedProgress: ReadingProgress | null;
+}
+
+function enhanceMarkdownOverflow(root: HTMLElement) {
+  resetMarkdownOverflow(root);
+  if (root.clientWidth <= 0) return;
+
+  const wrappers: HTMLElement[] = [];
+  for (const table of Array.from(root.querySelectorAll<HTMLTableElement>("table"))) {
+    if (!canWrapMarkdownOverflowElement(root, table)) continue;
+    wrappers.push(wrapMarkdownOverflowElement(table, "table"));
+  }
+
+  for (const element of Array.from(
+    root.querySelectorAll<HTMLElement>(markdownOverflowBlockSelector),
+  )) {
+    if (!canWrapMarkdownOverflowElement(root, element)) continue;
+    if (isMarkdownElementOverflowing(element)) {
+      wrappers.push(wrapMarkdownOverflowElement(element, "block"));
+    }
+  }
+
+  updateMarkdownOverflowFrameStates(wrappers);
+}
+
+function resetMarkdownOverflow(root: HTMLElement) {
+  for (const wrapper of Array.from(
+    root.querySelectorAll<HTMLElement>(markdownOverflowWrapperSelector),
+  )) {
+    unwrapMarkdownOverflowElement(wrapper);
+  }
+}
+
+function canWrapMarkdownOverflowElement(root: HTMLElement, element: HTMLElement) {
+  if (!root.contains(element) || !element.parentNode) return false;
+  if (element.closest(markdownOverflowWrapperSelector)) return false;
+  if (element.closest("pre, .mermaid-figure")) return false;
+  if (element instanceof HTMLTableElement) return true;
+  return !element.closest("table");
+}
+
+function isMarkdownElementOverflowing(element: HTMLElement) {
+  if (element.clientWidth <= 0) return false;
+  if (element.scrollWidth > element.clientWidth + markdownOverflowTolerancePx) return true;
+  const parent = element.parentElement;
+  if (!parent) return false;
+  const elementRect = element.getBoundingClientRect();
+  const parentRect = parent.getBoundingClientRect();
+  return elementRect.right > parentRect.right + markdownOverflowTolerancePx;
+}
+
+function wrapMarkdownOverflowElement(element: HTMLElement, kind: "block" | "table") {
+  const wrapper = document.createElement("div");
+  wrapper.className = `markdown-overflow-frame markdown-overflow-${kind}`;
+  wrapper.dataset.overflowWrapper = "true";
+  wrapper.setAttribute(
+    "aria-label",
+    kind === "table" ? "Scrollable markdown table" : "Scrollable markdown content",
+  );
+  element.parentNode?.insertBefore(wrapper, element);
+  wrapper.appendChild(element);
+  return wrapper;
+}
+
+function updateMarkdownOverflowFrameStates(wrappers: HTMLElement[]) {
+  for (const wrapper of wrappers) {
+    const isOverflowing =
+      wrapper.scrollWidth > wrapper.clientWidth + markdownOverflowTolerancePx;
+    wrapper.classList.toggle("is-overflowing", isOverflowing);
+    if (isOverflowing) {
+      wrapper.tabIndex = 0;
+    } else {
+      wrapper.removeAttribute("tabindex");
+    }
+  }
+}
+
+function unwrapMarkdownOverflowElement(wrapper: HTMLElement) {
+  const parent = wrapper.parentNode;
+  if (!parent) return;
+  while (wrapper.firstChild) {
+    parent.insertBefore(wrapper.firstChild, wrapper);
+  }
+  parent.removeChild(wrapper);
+}
+
+function shouldPreferCurrentChapterVersion(
+  progress: ReadingProgress,
+  currentVersion: ReadChapterResponse["version"],
+) {
+  if (progress.chapterVersionId === currentVersion.id) return false;
+  const progressTime = Date.parse(progress.updatedAt);
+  const currentVersionTime = Date.parse(currentVersion.createdAt);
+  if (!Number.isFinite(progressTime) || !Number.isFinite(currentVersionTime)) {
+    return true;
+  }
+  return progressTime <= currentVersionTime;
 }
 
 function AppTitlebar({ title, subtitle }: { title: string; subtitle: string }) {
@@ -667,6 +773,11 @@ export default function App() {
   const exportModalVisibleRef = useRef(false);
 
   latestSettingsRef.current = settings;
+
+  const annotationHighlightColors = useMemo(
+    () => parseHighlightPalette(settings.highlightColors),
+    [settings.highlightColors],
+  );
 
   useEffect(() => {
     void boot();
@@ -1280,6 +1391,48 @@ export default function App() {
       !articleRef.current ||
       enhancedMarkdownKey !== markdownEnhancementKey
     ) {
+      return;
+    }
+
+    const root = articleRef.current;
+    let frame = 0;
+    const scheduleEnhancement = () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        enhanceMarkdownOverflow(root);
+      });
+    };
+    const resizeObserver = new ResizeObserver(scheduleEnhancement);
+
+    scheduleEnhancement();
+    resizeObserver.observe(root);
+    window.addEventListener("resize", scheduleEnhancement);
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      resizeObserver.disconnect();
+      window.removeEventListener("resize", scheduleEnhancement);
+      resetMarkdownOverflow(root);
+    };
+  }, [
+    enhancedMarkdownKey,
+    markdownEnhancementKey,
+    reader,
+    settings.contentWidth,
+    settings.fontSize,
+    settings.lineHeight,
+    settings.paragraphSpacing,
+    settings.readerCjkFontFamily,
+    settings.readerFontFamily,
+    settings.readerLatinFontFamily,
+  ]);
+
+  useEffect(() => {
+    if (
+      !reader ||
+      !articleRef.current ||
+      enhancedMarkdownKey !== markdownEnhancementKey
+    ) {
       setReaderSearchMatches([]);
       setActiveReaderSearchIndex(-1);
       return;
@@ -1809,6 +1962,62 @@ export default function App() {
     return openedBook;
   }
 
+  async function rememberChapterVersionOpening(
+    nextReader: ReadChapterResponse,
+  ): Promise<ReadingProgress | null> {
+    try {
+      return await saveReadingProgress(
+        nextReader.chapter.bookId,
+        nextReader.chapter.id,
+        nextReader.version.id,
+        0,
+        0,
+      );
+    } catch (err) {
+      setError(readError(err));
+      return null;
+    }
+  }
+
+  async function readChapterWithVersionMemory(
+    chapter: Chapter,
+    progress?: ReadingProgress,
+  ): Promise<ChapterReadChoice> {
+    if (!progress) {
+      return {
+        reader: await readChapter(chapter.id),
+        scrollTop: 0,
+        rememberedProgress: null,
+      };
+    }
+
+    if (progress.chapterVersionId !== chapter.currentVersionId) {
+      const currentReader = await readChapter(chapter.id);
+      if (shouldPreferCurrentChapterVersion(progress, currentReader.version)) {
+        return {
+          reader: currentReader,
+          scrollTop: 0,
+          rememberedProgress: await rememberChapterVersionOpening(currentReader),
+        };
+      }
+    }
+
+    try {
+      return {
+        reader: await readChapterVersion(progress.chapterVersionId),
+        scrollTop: progress.scrollTop,
+        rememberedProgress: null,
+      };
+    } catch {
+      const currentReader = await readChapter(chapter.id);
+      return {
+        reader: currentReader,
+        scrollTop: 0,
+        rememberedProgress: await rememberChapterVersionOpening(currentReader),
+      };
+    }
+  }
+
   async function openBook(book: ReaderBook, targetChapterId?: string) {
     setBusy(true);
     setError("");
@@ -1831,34 +2040,37 @@ export default function App() {
         throw new Error("这本书没有可读章节。");
       }
       let nextReader: ReadChapterResponse;
+      let rememberedProgress: ReadingProgress | null = null;
       if (targetChapterId && nextChapters.some((chapter) => chapter.id === targetChapterId)) {
-        const progress = progressItems.find((item) => item.chapterId === targetChapterId);
-        if (progress) {
-          nextReader = await readChapterVersion(progress.chapterVersionId).catch(() =>
-            readChapter(progress.chapterId),
-          );
-          setPendingScroll(progress.scrollTop);
-        } else {
-          nextReader = await readChapter(targetChapterId);
-          setPendingScroll(0);
-        }
+        const targetChapter =
+          nextChapters.find((chapter) => chapter.id === targetChapterId) ?? nextChapters[0];
+        const progress = progressItems.find((item) => item.chapterId === targetChapter.id);
+        const choice = await readChapterWithVersionMemory(targetChapter, progress);
+        nextReader = choice.reader;
+        rememberedProgress = choice.rememberedProgress;
+        setPendingScroll(choice.scrollTop);
       } else {
         const progress = progressItems[0] ?? (await getLatestReadingProgress(book.id));
-        if (progress) {
-          nextReader = await readChapterVersion(progress.chapterVersionId).catch(() =>
-            readChapter(progress.chapterId),
-          );
-          setPendingScroll(progress.scrollTop);
-        } else {
-          nextReader = await readChapter(nextChapters[0].id);
-          setPendingScroll(0);
-        }
+        const progressChapter = progress
+          ? nextChapters.find((chapter) => chapter.id === progress.chapterId)
+          : null;
+        const choice = await readChapterWithVersionMemory(
+          progressChapter ?? nextChapters[0],
+          progressChapter ? progress ?? undefined : undefined,
+        );
+        nextReader = choice.reader;
+        rememberedProgress = choice.rememberedProgress;
+        setPendingScroll(choice.scrollTop);
       }
       const openedBook = await recordBookOpened(book.id);
       runViewTransition(() => {
+        const progressMap = buildChapterProgressMap(progressItems);
+        if (rememberedProgress) {
+          progressMap[rememberedProgress.chapterId] = rememberedProgress;
+        }
         setActiveBook({ ...book, lastOpenedAt: openedBook.lastOpenedAt });
         setChapters(nextChapters);
-        setChapterProgress(buildChapterProgressMap(progressItems));
+        setChapterProgress(progressMap);
         setReader(nextReader);
       });
     } catch (err) {
@@ -1987,13 +2199,20 @@ export default function App() {
     setAnnotationMenu(null);
     setChapterMenu(null);
     try {
+      const chapter = chapters.find((item) => item.id === chapterId);
+      if (!chapter) return;
       const progress = chapterProgress[chapterId];
-      const nextReader = progress
-        ? await readChapterVersion(progress.chapterVersionId).catch(() => readChapter(chapterId))
-        : await readChapter(chapterId);
+      const choice = await readChapterWithVersionMemory(chapter, progress);
       playReaderMotion("content");
-      setReader(nextReader);
-      setPendingScroll(progress ? progress.scrollTop : 0);
+      setReader(choice.reader);
+      setPendingScroll(choice.scrollTop);
+      const rememberedProgress = choice.rememberedProgress;
+      if (rememberedProgress) {
+        setChapterProgress((current) => ({
+          ...current,
+          [rememberedProgress.chapterId]: rememberedProgress,
+        }));
+      }
     } catch (err) {
       setError(readError(err));
     } finally {
@@ -2011,9 +2230,16 @@ export default function App() {
     setChapterMenu(null);
     try {
       const nextReader = await readChapterVersion(chapterVersionId);
+      const rememberedProgress = await rememberChapterVersionOpening(nextReader);
       playReaderMotion("content");
       setReader(nextReader);
       setPendingScroll(0);
+      if (rememberedProgress) {
+        setChapterProgress((current) => ({
+          ...current,
+          [rememberedProgress.chapterId]: rememberedProgress,
+        }));
+      }
     } catch (err) {
       setError(readError(err));
     } finally {
@@ -2269,7 +2495,7 @@ export default function App() {
       renderedStartOffset: renderedSelection.startOffset,
       renderedEndOffset: renderedSelection.endOffset,
       renderedText: renderedSelection.fullText,
-      highlightColor: highlightColors[0],
+      highlightColor: annotationHighlightColors[0],
       comment: "",
     };
   }
@@ -4162,6 +4388,7 @@ export default function App() {
             bookName={importBookName}
             selectedFilePaths={selectedImportFilePaths}
             busy={busy}
+            submitShortcut={shortcutBindings.submit}
             onBookNameChange={updateImportBookName}
             onSelectionChange={updateImportFileSelection}
             onClose={closeImportModal}
@@ -4750,6 +4977,7 @@ export default function App() {
         <NewAnnotationModal
           closing={draftClosing}
           draft={draft}
+          highlightColors={annotationHighlightColors}
           submitShortcut={shortcutBindings.submit}
           onChange={setDraft}
           onCancel={closeDraftModal}
@@ -4760,6 +4988,7 @@ export default function App() {
         <AnnotationDetailModal
           closing={detailAnnotationClosing}
           annotation={detailAnnotation}
+          highlightColors={annotationHighlightColors}
           submitShortcut={shortcutBindings.submit}
           onClose={closeReaderAnnotationDetail}
           onDelete={() => void handleDeleteAnnotation(detailAnnotation.id)}

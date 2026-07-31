@@ -151,6 +151,7 @@ export interface AppSettings {
   borderStyle: string;
   focusMode: boolean;
   slideAnnotate: boolean;
+  highlightColors: string;
   homeDefaultView: HomeLibraryView;
   homeTableColumns: string;
   homePageSize: number;

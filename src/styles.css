@@ -4414,7 +4414,8 @@ button:disabled {
 
 .reading-surface {
   position: relative;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 30px;
   scrollbar-color: var(--scroll-thumb) var(--scroll-track);
   scrollbar-width: thin;
@@ -4478,6 +4479,11 @@ button:disabled {
   --markdown-table-border: color-mix(in srgb, var(--line) 68%, var(--ink) 16%);
   --markdown-table-header-bg: color-mix(in srgb, var(--paper-strong) 86%, var(--accent) 5%);
   --markdown-table-row-bg: color-mix(in srgb, var(--paper-strong) 34%, transparent);
+  --markdown-overflow-border: color-mix(in srgb, var(--line) 78%, var(--ink) 8%);
+  --markdown-overflow-bg: color-mix(in srgb, var(--paper-strong) 72%, transparent);
+  --markdown-overflow-shadow: inset 0 -1px 0 color-mix(in srgb, var(--ink) 7%, transparent);
+  --markdown-overflow-scroll-track: color-mix(in srgb, var(--paper-strong) 76%, var(--line) 24%);
+  --markdown-overflow-scroll-thumb: color-mix(in srgb, var(--accent) 38%, var(--line) 62%);
   width: min(100%, var(--reader-width));
   min-height: calc(100vh - 182px);
   margin: 0 auto 34px;
@@ -4511,6 +4517,11 @@ button:disabled {
   --markdown-table-border: color-mix(in srgb, var(--line) 58%, var(--ink) 34%);
   --markdown-table-header-bg: color-mix(in srgb, var(--paper-strong) 78%, var(--accent) 10%);
   --markdown-table-row-bg: color-mix(in srgb, var(--paper-strong) 42%, transparent);
+  --markdown-overflow-border: color-mix(in srgb, var(--line) 64%, var(--ink) 24%);
+  --markdown-overflow-bg: color-mix(in srgb, var(--paper-strong) 62%, transparent);
+  --markdown-overflow-shadow: inset 0 -1px 0 color-mix(in srgb, #ffffff 8%, transparent);
+  --markdown-overflow-scroll-track: color-mix(in srgb, var(--paper-strong) 68%, #000000 20%);
+  --markdown-overflow-scroll-thumb: color-mix(in srgb, var(--accent) 46%, var(--line) 54%);
 }
 
 .chapter-bottom-nav {
@@ -4637,6 +4648,17 @@ button:disabled {
   font-family: "JetBrains Mono", Consolas, monospace;
   font-size: 0.88em;
   padding: 0.1em 0.34em;
+}
+
+.markdown-body :not(pre) > code {
+  display: inline-block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-color: var(--markdown-overflow-scroll-thumb) var(--markdown-overflow-scroll-track);
+  scrollbar-width: thin;
+  vertical-align: text-bottom;
+  white-space: nowrap;
 }
 
 .markdown-body pre {
@@ -4794,6 +4816,78 @@ button:disabled {
 
 .markdown-body .mermaid-diagram.is-error pre {
   margin: 14px 0 0;
+}
+
+.markdown-body .markdown-overflow-frame {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  scrollbar-color: var(--markdown-overflow-scroll-thumb) var(--markdown-overflow-scroll-track);
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.markdown-body .markdown-overflow-frame.is-overflowing {
+  border: 1px solid var(--markdown-overflow-border);
+  border-radius: 8px;
+  background: var(--markdown-overflow-bg);
+  box-shadow: var(--markdown-overflow-shadow);
+}
+
+.markdown-body .markdown-overflow-frame:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  outline-offset: 2px;
+}
+
+.markdown-body .markdown-overflow-frame::-webkit-scrollbar,
+.markdown-body :not(pre) > code::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.markdown-body .markdown-overflow-frame::-webkit-scrollbar-track,
+.markdown-body :not(pre) > code::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: var(--markdown-overflow-scroll-track);
+}
+
+.markdown-body .markdown-overflow-frame::-webkit-scrollbar-thumb,
+.markdown-body :not(pre) > code::-webkit-scrollbar-thumb {
+  border: 2px solid var(--markdown-overflow-scroll-track);
+  border-radius: 999px;
+  background: var(--markdown-overflow-scroll-thumb);
+  background-clip: padding-box;
+}
+
+.markdown-body .markdown-overflow-table {
+  margin: 0 0 var(--reader-paragraph-spacing);
+}
+
+.markdown-body .markdown-overflow-table > table {
+  width: max-content;
+  min-width: 100%;
+  max-width: none;
+  margin: 0;
+  border: 0;
+  table-layout: auto;
+}
+
+.markdown-body .markdown-overflow-table :not(pre) > code {
+  max-width: none;
+  overflow: visible;
+}
+
+.markdown-body .markdown-overflow-block.is-overflowing {
+  margin: 0 0 var(--reader-paragraph-spacing);
+}
+
+.markdown-body .markdown-overflow-block.is-overflowing > :first-child {
+  width: max-content;
+  min-width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0.72em 0.9em;
 }
 
 .markdown-body table {
@@ -6648,6 +6742,387 @@ body.sorting-drag-active * {
   color: var(--accent);
 }
 
+.highlight-penbox-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.highlight-penbox-actions .luck-theme-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.highlight-penbox-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 0.72fr) minmax(220px, 1fr);
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--paper-strong));
+  padding: 12px;
+}
+
+.highlight-penbox-summary > span {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.highlight-penbox-summary strong,
+.highlight-penbox-card strong {
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.highlight-penbox-summary small,
+.highlight-penbox-card small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.highlight-penbox-list {
+  display: grid;
+  gap: 10px;
+}
+
+.highlight-penbox-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--paper-strong) 76%, transparent);
+  padding: 8px;
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.highlight-penbox-card.active {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, var(--paper-strong));
+}
+
+.highlight-penbox-card:hover {
+  transform: translateY(-1px);
+}
+
+.highlight-penbox-select {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 0.72fr) minmax(190px, 1fr);
+  align-items: center;
+  gap: 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 4px;
+  text-align: left;
+}
+
+.highlight-penbox-select > span {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.highlight-penbox-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.highlight-penbox-card-actions .icon-button.danger {
+  color: #c94b35;
+}
+
+.highlight-penbox-card-actions .icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
+.highlight-penbox-swatches,
+.highlight-penbox-preview {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--paper-strong) 74%, transparent);
+  padding: 10px;
+}
+
+.highlight-penbox-preview {
+  margin-bottom: 12px;
+}
+
+.highlight-penbox-swatches span,
+.highlight-penbox-preview span {
+  display: block;
+  height: 28px;
+  border: 1px solid color-mix(in srgb, var(--ink) 16%, transparent);
+  border-radius: 8px;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--ink) 7%, transparent) 50%, transparent 50%),
+    var(--highlight-color);
+  background-size: 12px 12px, auto;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #ffffff 18%, transparent);
+}
+
+.highlight-penbox-card .highlight-penbox-swatches {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.highlight-penbox-card .highlight-penbox-swatches span {
+  height: 24px;
+}
+
+.highlight-penbox-modal {
+  width: min(760px, calc(100vw - 44px));
+}
+
+.highlight-penbox-name-field {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 780;
+}
+
+.highlight-penbox-name-field input {
+  width: 100%;
+  height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper-strong);
+  color: var(--ink);
+  outline: none;
+  padding: 0 12px;
+}
+
+.highlight-penbox-name-field input:focus {
+  border-color: var(--accent);
+  outline: 3px solid color-mix(in srgb, var(--accent) 20%, transparent);
+  outline-offset: 1px;
+}
+
+.highlight-penbox-modal-body {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  min-height: 390px;
+  overflow: hidden;
+  margin-top: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--paper-strong) 84%, transparent);
+}
+
+.highlight-penbox-slot-list {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  border-right: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-bg) 80%, transparent);
+  padding: 14px 10px;
+}
+
+.highlight-penbox-slot-list button {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 8px;
+  min-height: 46px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  padding: 8px;
+  text-align: left;
+}
+
+.highlight-penbox-slot-list button:hover,
+.highlight-penbox-slot-list button.active {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, var(--paper-strong));
+}
+
+.highlight-penbox-slot-list button strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.highlight-penbox-slot-list button svg {
+  color: var(--accent);
+}
+
+.highlight-penbox-editor-panel {
+  display: grid;
+  min-width: 0;
+  place-items: center;
+  padding: 28px;
+}
+
+.highlight-penbox-editor-panel .highlight-color-slot {
+  width: min(390px, 100%);
+}
+
+.highlight-penbox-modal .modal-actions {
+  margin-top: 14px;
+}
+
+.highlight-color-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.highlight-color-slot {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--paper-strong) 82%, transparent);
+  padding: 10px;
+}
+
+.highlight-slot-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.highlight-slot-heading strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.highlight-slot-preview {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--ink) 18%, transparent);
+  border-radius: 50%;
+  background:
+    linear-gradient(45deg, color-mix(in srgb, var(--ink) 8%, transparent) 25%, transparent 25% 75%, color-mix(in srgb, var(--ink) 8%, transparent) 75%),
+    var(--highlight-color);
+  background-size: 12px 12px, auto;
+}
+
+.highlight-color-plane {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  aspect-ratio: 1.55;
+  border: 1px solid color-mix(in srgb, var(--line) 72%, var(--ink) 10%);
+  border-radius: 8px;
+  background:
+    linear-gradient(to top, #000000, transparent),
+    linear-gradient(to right, #ffffff, hsl(var(--highlight-hue) 100% 50%));
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.highlight-color-plane i {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.42), 0 2px 8px rgba(0, 0, 0, 0.28);
+  transform: translate(-50%, -50%);
+}
+
+.highlight-color-controls {
+  display: grid;
+  grid-template-columns: minmax(86px, 0.72fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.highlight-native-picker,
+.highlight-hex-field,
+.highlight-range-field {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 780;
+}
+
+.highlight-native-picker input,
+.highlight-hex-field input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper-strong);
+  color: var(--ink);
+}
+
+.highlight-native-picker input {
+  cursor: pointer;
+  padding: 3px;
+}
+
+.highlight-hex-field input {
+  padding: 0 9px;
+  text-transform: lowercase;
+}
+
+.highlight-hex-field input:focus,
+.highlight-native-picker input:focus-visible,
+.highlight-range-field input:focus-visible {
+  border-color: var(--accent);
+  outline: 3px solid color-mix(in srgb, var(--accent) 20%, transparent);
+  outline-offset: 1px;
+}
+
+.highlight-range-field {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.highlight-range-field span {
+  min-width: 48px;
+}
+
+.highlight-range-field strong {
+  min-width: 38px;
+  color: var(--ink);
+  font-size: 11px;
+  text-align: right;
+}
+
+.highlight-range-field input {
+  width: 100%;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+
+.highlight-range-field.hue input {
+  accent-color: hsl(var(--highlight-hue) 100% 45%);
+}
+
 .shortcut-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -8485,6 +8960,33 @@ body.version-sidebar-resize-active * {
     grid-template-columns: 1fr;
   }
 
+  .highlight-penbox-summary,
+  .highlight-penbox-select,
+  .highlight-penbox-modal-body {
+    grid-template-columns: 1fr;
+  }
+
+  .highlight-penbox-slot-list {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    overflow: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    scrollbar-color: var(--scroll-thumb) var(--scroll-track);
+    scrollbar-width: thin;
+  }
+
+  .highlight-penbox-slot-list button {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .highlight-penbox-slot-list button svg {
+    display: none;
+  }
+
+  .highlight-penbox-editor-panel {
+    padding: 16px;
+  }
+
   .theme-series-list {
     max-height: none;
   }
@@ -8569,7 +9071,8 @@ body.version-sidebar-resize-active * {
 
   .reader-shell {
     display: block;
-    overflow: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
   }
 
   .reader-column-resizer,
@@ -8638,7 +9141,8 @@ body.version-sidebar-resize-active * {
   }
 
   .reading-surface {
-    overflow: visible;
+    overflow-x: hidden;
+    overflow-y: visible;
     padding: 14px;
   }
 

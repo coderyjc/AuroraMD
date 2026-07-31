@@ -1,6 +1,7 @@
 import type { AppSettings, HomeTableColumnKey, ShortcutBindings } from "./types";
 
 export const highlightColors = ["#f7d86a", "#83d9b7", "#f2a0a1", "#9db7ff", "#d7b7ff"];
+export const highlightPaletteSize = 5;
 
 export const themeSeriesOptions = [
   {
@@ -697,6 +698,7 @@ export const defaultSettings: AppSettings = {
   borderStyle: "hairline",
   focusMode: false,
   slideAnnotate: false,
+  highlightColors: JSON.stringify(highlightColors),
   homeDefaultView: "grid",
   homeTableColumns: JSON.stringify(defaultHomeTableColumns),
   homePageSize: 20,

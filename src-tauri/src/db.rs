@@ -5,7 +5,7 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
     let conn = Connection::open(db_path)?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.execute_batch(
-        r#"
+        r##"
         CREATE TABLE IF NOT EXISTS books (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -101,6 +101,7 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
             border_style TEXT NOT NULL,
             focus_mode INTEGER NOT NULL DEFAULT 0,
             slide_annotate INTEGER NOT NULL DEFAULT 0,
+            highlight_colors TEXT NOT NULL DEFAULT '["#f7d86a","#83d9b7","#f2a0a1","#9db7ff","#d7b7ff"]',
             home_default_view TEXT NOT NULL DEFAULT 'grid',
             home_table_columns TEXT NOT NULL DEFAULT '{"rowNumber":true,"rootPath":true,"chapterCount":true,"annotationCount":true,"createdAt":true,"lastOpenedAt":true}',
             home_page_size INTEGER NOT NULL DEFAULT 20,
@@ -123,7 +124,7 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
-        "#,
+        "##,
     )?;
 
     ensure_column(
@@ -203,6 +204,12 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
         "settings",
         "slide_annotate",
         "ALTER TABLE settings ADD COLUMN slide_annotate INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(
+        &conn,
+        "settings",
+        "highlight_colors",
+        "ALTER TABLE settings ADD COLUMN highlight_colors TEXT NOT NULL DEFAULT '[\"#f7d86a\",\"#83d9b7\",\"#f2a0a1\",\"#9db7ff\",\"#d7b7ff\"]'",
     )?;
     ensure_column(
         &conn,
@@ -352,7 +359,7 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
     )?;
 
     conn.execute(
-        r#"
+        r##"
         INSERT OR IGNORE INTO settings (
             id,
             annotation_context_chars,
@@ -374,6 +381,7 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
             border_style,
             focus_mode,
             slide_annotate,
+            highlight_colors,
             home_default_view,
             home_table_columns,
             home_page_size,
@@ -385,8 +393,8 @@ pub fn init_database(db_path: &Path) -> Result<Connection, rusqlite::Error> {
             ai_request_format,
             ai_api_key,
             ai_model
-        ) VALUES (1, 100, 'classic', 'paper', 'Literata, Georgia, serif', '"IBM Plex Sans", "Segoe UI", "Microsoft YaHei", sans-serif', '"IBM Plex Sans", "Segoe UI", sans-serif', '"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif', 'Literata, Georgia, serif', 'Literata, Georgia, serif', '"Noto Serif SC", "Songti SC", SimSun, serif', 18, 1.72, 820, 52, 18, 'warm', 'hairline', 0, 0, 'grid', '{"rowNumber":true,"rootPath":true,"chapterCount":true,"annotationCount":true,"createdAt":true,"lastOpenedAt":true}', 20, '{"search":"Ctrl+K","nextChapter":"N","previousChapter":"P","highlight":"H","export":"E","submit":"Ctrl+Enter","toggleLeft":"[","toggleRight":"]"}', 0, 30, '', '', 'openai', '', '')
-        "#,
+        ) VALUES (1, 100, 'classic', 'paper', 'Literata, Georgia, serif', '"IBM Plex Sans", "Segoe UI", "Microsoft YaHei", sans-serif', '"IBM Plex Sans", "Segoe UI", sans-serif', '"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif', 'Literata, Georgia, serif', 'Literata, Georgia, serif', '"Noto Serif SC", "Songti SC", SimSun, serif', 18, 1.72, 820, 52, 18, 'warm', 'hairline', 0, 0, '["#f7d86a","#83d9b7","#f2a0a1","#9db7ff","#d7b7ff"]', 'grid', '{"rowNumber":true,"rootPath":true,"chapterCount":true,"annotationCount":true,"createdAt":true,"lastOpenedAt":true}', 20, '{"search":"Ctrl+K","nextChapter":"N","previousChapter":"P","highlight":"H","export":"E","submit":"Ctrl+Enter","toggleLeft":"[","toggleRight":"]"}', 0, 30, '', '', 'openai', '', '')
+        "##,
         [],
     )?;
 

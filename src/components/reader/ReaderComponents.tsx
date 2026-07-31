@@ -19,7 +19,6 @@ import {
 import { type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, useEffect, useRef, useState } from "react";
 
 import { FontPicker } from "../FontPicker";
-import { highlightColors } from "../../constants";
 import type {
   Annotation,
   AppSettings,
@@ -650,6 +649,7 @@ function DiffColumn({
 export function NewAnnotationModal({
   closing,
   draft,
+  highlightColors,
   submitShortcut,
   onChange,
   onCancel,
@@ -657,6 +657,7 @@ export function NewAnnotationModal({
 }: {
   closing: boolean;
   draft: SelectionDraft;
+  highlightColors: string[];
   submitShortcut: string;
   onChange: (draft: SelectionDraft) => void;
   onCancel: () => void;
@@ -695,6 +696,7 @@ export function NewAnnotationModal({
         </header>
         <blockquote>{draft.selectedText}</blockquote>
         <ColorSwatches
+          colors={highlightColors}
           value={draft.highlightColor}
           onChange={(highlightColor) => onChange({ ...draft, highlightColor })}
         />
@@ -719,6 +721,7 @@ export function NewAnnotationModal({
 export function AnnotationDetailModal({
   closing,
   annotation,
+  highlightColors,
   submitShortcut,
   onClose,
   onDelete,
@@ -726,6 +729,7 @@ export function AnnotationDetailModal({
 }: {
   closing: boolean;
   annotation: Annotation;
+  highlightColors: string[];
   submitShortcut: string;
   onClose: () => void;
   onDelete: () => void;
@@ -776,7 +780,7 @@ export function AnnotationDetailModal({
           <small>{annotation.headingPath || "无标题路径"}</small>
         </div>
         <blockquote>{annotation.selectedText}</blockquote>
-        <ColorSwatches value={highlightColor} onChange={setHighlightColor} />
+        <ColorSwatches colors={highlightColors} value={highlightColor} onChange={setHighlightColor} />
         <textarea value={comment} onChange={(event) => setComment(event.target.value)} />
         <div className="modal-actions">
           <button className="danger" onClick={onDelete}>
@@ -1024,17 +1028,19 @@ function diffBlockLabel(type: DiffBlockType) {
 }
 
 function ColorSwatches({
+  colors,
   value,
   onChange,
 }: {
+  colors: string[];
   value: string;
   onChange: (color: string) => void;
 }) {
   return (
     <div className="color-swatches">
-      {highlightColors.map((color) => (
+      {colors.map((color, index) => (
         <button
-          key={color}
+          key={`${index}-${color}`}
           className={value === color ? "active" : ""}
           style={{ background: color }}
           title={color}
