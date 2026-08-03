@@ -2,7 +2,6 @@ import {
   ArrowLeft,
   ChevronLeft,
   ChevronRight,
-  Check,
   FileText,
   FolderPlus,
   Grid3X3,
@@ -11,17 +10,14 @@ import {
   Maximize2,
   MessageSquare,
   Minimize2,
-  Minus,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
   Search,
   Settings,
-  Square,
   Trash2,
   WandSparkles,
-  X,
 } from "lucide-react";
 import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
 import { availableMonitors, cursorPosition, getCurrentWindow } from "@tauri-apps/api/window";
@@ -101,6 +97,7 @@ import {
   SyncReportModal,
   VersionManagerModal,
 } from "./components/home/HomeModals";
+import { AppTitlebar } from "./components/AppTitlebar";
 import {
   AnnotationCard,
   AnnotationContextMenu,
@@ -117,11 +114,9 @@ import {
   type SelectionDraft,
 } from "./components/reader/ReaderComponents";
 import {
-  defaultHomeTableColumns,
   defaultSettings,
   getDefaultThemeForSeries,
   getEffectiveThemeSeries,
-  homePageSizeOptions,
 } from "./constants";
 import {
   applyDomHighlights,
@@ -130,7 +125,6 @@ import {
   getHeadingPath,
   getMarkdownReadableText,
   getRenderedSelectionAnchor,
-  renderMarkdownToReadableText,
   renderMarkdownWithAnnotations,
   type ChangeHighlight,
   type SearchHighlight,
@@ -152,7 +146,6 @@ import type {
   ExportTemplate,
   FolderSyncReport,
   HomeLibraryView,
-  HomeTableColumnKey,
   HomeView,
   ImportBookPreview,
   NoteItem,
@@ -162,9 +155,59 @@ import type {
   SystemFont,
 } from "./types";
 import { chapterFileName } from "./utils/chapters";
-import { diffMarkdownLines } from "./utils/diff";
+import { readError } from "./utils/errors";
+import { composeLanguageFontStack, createLanguageFontFace } from "./utils/fontCss";
+import {
+  bookTableColumnMaxWidths,
+  bookTableColumnMinWidths,
+  compareBookValues,
+  defaultBookTableColumnWidths,
+  defaultBookTableSort,
+  deriveImportBookName,
+  formatBookDate,
+  getVisiblePaginationItems,
+  isHomeImportDragBlocked,
+  normalizeHomeLibraryView,
+  normalizeHomePageSize,
+  parseHomeTableColumns,
+  buildPaginationState,
+  type BookTableResizableColumnKey,
+  type BookTableSortKey,
+  type BookTableSortState,
+  type PaginationState,
+} from "./utils/homeLibrary";
 import { parseHighlightPalette } from "./utils/highlights";
+import { clamp } from "./utils/math";
+import { enhanceMarkdownOverflow, resetMarkdownOverflow } from "./utils/markdownOverflow";
+import {
+  ChapterProgressIcon,
+  buildChapterProgressMap,
+  getScrollProgressRatio,
+  isChapterProgressComplete,
+} from "./utils/readingProgress";
+import {
+  buildChangeHighlights,
+  buildReaderSearchMatches,
+  getReadingStats,
+  sortReaderAnnotations,
+  type ReaderSearchMatch,
+} from "./utils/reader";
+import {
+  buildRewriteDiffSegments,
+  composeSelectedRewriteContent,
+  delay,
+} from "./utils/rewrite";
 import { matchShortcut, parseShortcutBindings, shouldIgnoreShortcut } from "./utils/shortcuts";
+import {
+  getInitialWindowPlacement,
+  isWindowPlacementVisible,
+  legacyWindowPlacementStorageKeys,
+  readSavedWindowPlacement,
+  windowPlacementSaveDelayMs,
+  windowPlacementStorageKey,
+  writeSavedWindowPlacement,
+  type WindowPlacementBounds,
+} from "./utils/windowPlacement";
 
 interface ContextMenuState {
   x: number;
@@ -174,14 +217,6 @@ interface ContextMenuState {
 type AnnotationMenuState = ContextMenuState & { annotation: Annotation };
 type ChapterMenuState = ContextMenuState & { chapter: Chapter };
 type ReaderBook = Book | BookSummary;
-
-interface ReaderSearchMatch {
-  id: string;
-  startOffset: number;
-  endOffset: number;
-  matchedText: string;
-  excerpt: string;
-}
 
 interface FullscreenReveal {
   top: boolean;
@@ -208,63 +243,6 @@ type ViewTransitionDocument = Document & {
   startViewTransition?: (callback: () => void) => { finished: Promise<void> };
 };
 
-type BookTableSortKey =
-  | "name"
-  | "rootPath"
-  | "chapterCount"
-  | "annotationCount"
-  | "createdAt"
-  | "lastOpenedAt";
-type SortDirection = "asc" | "desc";
-type BookTableResizableColumnKey = HomeTableColumnKey | "name";
-
-interface BookTableSortState {
-  key: BookTableSortKey;
-  direction: SortDirection;
-}
-
-interface PaginationState {
-  pageIndex: number;
-  pageCount: number;
-  pageSize: number;
-  total: number;
-  startIndex: number;
-  endIndex: number;
-  visible: boolean;
-}
-
-const defaultBookTableSort: BookTableSortState = { key: "lastOpenedAt", direction: "desc" };
-
-const defaultBookTableColumnWidths: Record<BookTableResizableColumnKey, number> = {
-  rowNumber: 72,
-  name: 360,
-  rootPath: 320,
-  chapterCount: 116,
-  annotationCount: 116,
-  createdAt: 156,
-  lastOpenedAt: 156,
-};
-
-const bookTableColumnMinWidths: Record<BookTableResizableColumnKey, number> = {
-  rowNumber: 56,
-  name: 220,
-  rootPath: 220,
-  chapterCount: 96,
-  annotationCount: 96,
-  createdAt: 128,
-  lastOpenedAt: 128,
-};
-
-const bookTableColumnMaxWidths: Record<BookTableResizableColumnKey, number> = {
-  rowNumber: 120,
-  name: 620,
-  rootPath: 680,
-  chapterCount: 180,
-  annotationCount: 180,
-  createdAt: 240,
-  lastOpenedAt: 240,
-};
-
 const uiExitMs = 150;
 const readerMotionMs = 220;
 const noticeAutoDismissMs = 2000;
@@ -273,128 +251,10 @@ const fullscreenTopKeepPx = 126;
 const fullscreenSideKeepPaddingPx = 36;
 const fullscreenTopPollMs = 80;
 const fullscreenTopCursorPx = 8;
-const readingProgressCompleteThreshold = 0.995;
-const readingProgressCompleteRemainingPx = 2;
-const windowPlacementStorageKey = "auroramd.windowPlacement.v1";
-const legacyWindowPlacementStorageKeys = ["annotaloop.windowPlacement.v1"];
-const windowPlacementSaveDelayMs = 320;
-const minimumRestoredWindowSize = 360;
-const initialWindowWidthRatio = 0.69;
-const initialWindowHeightRatio = 0.82;
-const initialWindowMinWidth = 980;
-const initialWindowMinHeight = 680;
-const initialWindowEdgePaddingPx = 32;
-const markdownOverflowWrapperSelector =
-  ".markdown-overflow-frame[data-overflow-wrapper='true']";
-const markdownOverflowBlockSelector = "p, blockquote, h1, h2, h3, h4, h5, h6";
-const markdownOverflowTolerancePx = 2;
-
-interface WindowPlacementBounds {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-interface SavedWindowPlacement extends WindowPlacementBounds {
-  savedAt: number;
-}
-
-interface WindowPlacementMonitor {
-  position: PhysicalPosition;
-  workArea: {
-    position: PhysicalPosition;
-    size: PhysicalSize;
-  };
-}
-
 interface ChapterReadChoice {
   reader: ReadChapterResponse;
   scrollTop: number;
   rememberedProgress: ReadingProgress | null;
-}
-
-function enhanceMarkdownOverflow(root: HTMLElement) {
-  resetMarkdownOverflow(root);
-  if (root.clientWidth <= 0) return;
-
-  const wrappers: HTMLElement[] = [];
-  for (const table of Array.from(root.querySelectorAll<HTMLTableElement>("table"))) {
-    if (!canWrapMarkdownOverflowElement(root, table)) continue;
-    wrappers.push(wrapMarkdownOverflowElement(table, "table"));
-  }
-
-  for (const element of Array.from(
-    root.querySelectorAll<HTMLElement>(markdownOverflowBlockSelector),
-  )) {
-    if (!canWrapMarkdownOverflowElement(root, element)) continue;
-    if (isMarkdownElementOverflowing(element)) {
-      wrappers.push(wrapMarkdownOverflowElement(element, "block"));
-    }
-  }
-
-  updateMarkdownOverflowFrameStates(wrappers);
-}
-
-function resetMarkdownOverflow(root: HTMLElement) {
-  for (const wrapper of Array.from(
-    root.querySelectorAll<HTMLElement>(markdownOverflowWrapperSelector),
-  )) {
-    unwrapMarkdownOverflowElement(wrapper);
-  }
-}
-
-function canWrapMarkdownOverflowElement(root: HTMLElement, element: HTMLElement) {
-  if (!root.contains(element) || !element.parentNode) return false;
-  if (element.closest(markdownOverflowWrapperSelector)) return false;
-  if (element.closest("pre, .mermaid-figure")) return false;
-  if (element instanceof HTMLTableElement) return true;
-  return !element.closest("table");
-}
-
-function isMarkdownElementOverflowing(element: HTMLElement) {
-  if (element.clientWidth <= 0) return false;
-  if (element.scrollWidth > element.clientWidth + markdownOverflowTolerancePx) return true;
-  const parent = element.parentElement;
-  if (!parent) return false;
-  const elementRect = element.getBoundingClientRect();
-  const parentRect = parent.getBoundingClientRect();
-  return elementRect.right > parentRect.right + markdownOverflowTolerancePx;
-}
-
-function wrapMarkdownOverflowElement(element: HTMLElement, kind: "block" | "table") {
-  const wrapper = document.createElement("div");
-  wrapper.className = `markdown-overflow-frame markdown-overflow-${kind}`;
-  wrapper.dataset.overflowWrapper = "true";
-  wrapper.setAttribute(
-    "aria-label",
-    kind === "table" ? "Scrollable markdown table" : "Scrollable markdown content",
-  );
-  element.parentNode?.insertBefore(wrapper, element);
-  wrapper.appendChild(element);
-  return wrapper;
-}
-
-function updateMarkdownOverflowFrameStates(wrappers: HTMLElement[]) {
-  for (const wrapper of wrappers) {
-    const isOverflowing =
-      wrapper.scrollWidth > wrapper.clientWidth + markdownOverflowTolerancePx;
-    wrapper.classList.toggle("is-overflowing", isOverflowing);
-    if (isOverflowing) {
-      wrapper.tabIndex = 0;
-    } else {
-      wrapper.removeAttribute("tabindex");
-    }
-  }
-}
-
-function unwrapMarkdownOverflowElement(wrapper: HTMLElement) {
-  const parent = wrapper.parentNode;
-  if (!parent) return;
-  while (wrapper.firstChild) {
-    parent.insertBefore(wrapper.firstChild, wrapper);
-  }
-  parent.removeChild(wrapper);
 }
 
 function shouldPreferCurrentChapterVersion(
@@ -408,212 +268,6 @@ function shouldPreferCurrentChapterVersion(
     return true;
   }
   return progressTime <= currentVersionTime;
-}
-
-function AppTitlebar({ title, subtitle }: { title: string; subtitle: string }) {
-  function handleDrag(event: ReactMouseEvent<HTMLDivElement>) {
-    if (event.button !== 0) return;
-    if ((event.target as HTMLElement).closest("button")) return;
-    const appWindow = getCurrentWindow();
-    if (event.detail >= 2) {
-      void appWindow.toggleMaximize();
-      return;
-    }
-    void appWindow.startDragging();
-  }
-
-  return (
-    <div className="desktop-titlebar" onMouseDown={handleDrag}>
-      <div className="titlebar-brand" data-tauri-drag-region>
-        <span className="titlebar-mark" aria-hidden="true" />
-        <div className="titlebar-copy">
-          <strong>{title}</strong>
-          <span>{subtitle}</span>
-        </div>
-      </div>
-      <div className="window-controls">
-        <button
-          type="button"
-          className="window-control"
-          title="最小化"
-          aria-label="最小化"
-          onClick={() => void getCurrentWindow().minimize()}
-        >
-          <Minus size={15} />
-        </button>
-        <button
-          type="button"
-          className="window-control"
-          title="最大化或还原"
-          aria-label="最大化或还原"
-          onClick={() => void getCurrentWindow().toggleMaximize()}
-        >
-          <Square size={13} />
-        </button>
-        <button
-          type="button"
-          className="window-control close"
-          title="关闭"
-          aria-label="关闭"
-          onClick={() => void getCurrentWindow().close()}
-        >
-          <X size={16} />
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function deriveImportBookName(preview: ImportBookPreview, filePaths: string[]) {
-  if (filePaths.length === 1) {
-    if (preview.files.length === 1) return preview.defaultName;
-    return preview.files.find((file) => file.path === filePaths[0])?.name ?? preview.defaultName;
-  }
-  return preview.defaultName;
-}
-
-function normalizeHomeLibraryView(value: string): HomeLibraryView {
-  return value === "table" ? "table" : "grid";
-}
-
-function normalizeHomePageSize(value: number) {
-  return homePageSizeOptions.includes(value as (typeof homePageSizeOptions)[number])
-    ? value
-    : defaultSettings.homePageSize;
-}
-
-function buildPaginationState(total: number, requestedPageIndex: number, pageSize: number): PaginationState {
-  const normalizedPageSize = normalizeHomePageSize(pageSize);
-  const pageCount = Math.max(1, Math.ceil(total / normalizedPageSize));
-  const pageIndex = clamp(requestedPageIndex, 0, pageCount - 1);
-  const startIndex = pageIndex * normalizedPageSize;
-  const endIndex = Math.min(total, startIndex + normalizedPageSize);
-  return {
-    pageIndex,
-    pageCount,
-    pageSize: normalizedPageSize,
-    total,
-    startIndex,
-    endIndex,
-    visible: total > normalizedPageSize,
-  };
-}
-
-function getVisiblePaginationItems(pageIndex: number, pageCount: number) {
-  if (pageCount <= 7) {
-    return Array.from({ length: pageCount }, (_, index) => index);
-  }
-
-  const items: Array<number | "ellipsis"> = [0];
-  const start = Math.max(1, pageIndex - 1);
-  const end = Math.min(pageCount - 2, pageIndex + 1);
-  if (start > 1) items.push("ellipsis");
-  for (let index = start; index <= end; index += 1) {
-    items.push(index);
-  }
-  if (end < pageCount - 2) items.push("ellipsis");
-  items.push(pageCount - 1);
-  return items;
-}
-
-function parseHomeTableColumns(value: string): Record<HomeTableColumnKey, boolean> {
-  try {
-    const parsed = JSON.parse(value) as Partial<Record<HomeTableColumnKey, unknown>>;
-    return {
-      rowNumber: parsed.rowNumber === undefined ? true : Boolean(parsed.rowNumber),
-      rootPath: parsed.rootPath === undefined ? true : Boolean(parsed.rootPath),
-      chapterCount: parsed.chapterCount === undefined ? true : Boolean(parsed.chapterCount),
-      annotationCount: parsed.annotationCount === undefined ? true : Boolean(parsed.annotationCount),
-      createdAt: parsed.createdAt === undefined ? true : Boolean(parsed.createdAt),
-      lastOpenedAt: parsed.lastOpenedAt === undefined ? true : Boolean(parsed.lastOpenedAt),
-    };
-  } catch {
-    return defaultHomeTableColumns;
-  }
-}
-
-function formatBookDate(value?: string | null) {
-  if (!value) return "未记录";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "未记录";
-  return new Intl.DateTimeFormat("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-}
-
-function compareBookValues(left: BookSummary, right: BookSummary, key: BookTableSortKey) {
-  if (key === "name") {
-    return left.name.localeCompare(right.name, "zh-CN", { numeric: true, sensitivity: "base" });
-  }
-  if (key === "rootPath") {
-    return left.rootPath.localeCompare(right.rootPath, "zh-CN", { numeric: true, sensitivity: "base" });
-  }
-  if (key === "chapterCount") return left.chapterCount - right.chapterCount;
-  if (key === "annotationCount") return left.annotationCount - right.annotationCount;
-  const leftTime = new Date(key === "createdAt" ? left.createdAt : left.lastOpenedAt ?? "").getTime();
-  const rightTime = new Date(key === "createdAt" ? right.createdAt : right.lastOpenedAt ?? "").getTime();
-  return (Number.isNaN(leftTime) ? 0 : leftTime) - (Number.isNaN(rightTime) ? 0 : rightTime);
-}
-
-function buildRewriteDiffSegments(oldContent: string, newContent: string): RewriteDiffSegment[] {
-  return diffMarkdownLines(oldContent, newContent).map((block) => ({
-    id: block.id,
-    type: block.type,
-    oldStart: block.oldStart,
-    newStart: block.newStart,
-    oldLines: block.oldLines,
-    newLines: block.newLines,
-  }));
-}
-
-function composeSelectedRewriteContent(
-  oldContent: string,
-  newContent: string,
-  segments: RewriteDiffSegment[],
-  selectedSegmentIds: Set<string>,
-) {
-  if (segments.length === 0) return newContent;
-
-  const oldLines = splitMarkdownLines(oldContent);
-  const newLines = splitMarkdownLines(newContent);
-  const finalLines: string[] = [];
-  let oldIndex = 0;
-  let newIndex = 0;
-
-  for (const segment of segments) {
-    const oldStartIndex = Math.max(0, segment.oldStart - 1);
-    const newStartIndex = Math.max(0, segment.newStart - 1);
-    finalLines.push(...oldLines.slice(oldIndex, oldStartIndex));
-
-    if (selectedSegmentIds.has(segment.id)) {
-      finalLines.push(...segment.newLines);
-    } else {
-      finalLines.push(...segment.oldLines);
-    }
-
-    oldIndex = oldStartIndex + segment.oldLines.length;
-    newIndex = newStartIndex + segment.newLines.length;
-  }
-
-  finalLines.push(...oldLines.slice(oldIndex));
-  if (oldIndex >= oldLines.length && newIndex < newLines.length) {
-    finalLines.push(...newLines.slice(newIndex));
-  }
-  return finalLines.join("\n");
-}
-
-function splitMarkdownLines(content: string) {
-  return content.replace(/\r\n/g, "\n").split("\n");
-}
-
-function delay(ms: number) {
-  return new Promise<void>((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
 }
 
 export default function App() {
@@ -5006,444 +4660,4 @@ export default function App() {
       )}
     </div>
   );
-}
-
-function readError(err: unknown) {
-  const message = err instanceof Error ? err.message : String(err);
-  return translateErrorMessage(message);
-}
-
-function translateErrorMessage(message: string) {
-  const exactMessages: Record<string, string> = {
-    "Selected path is not a folder.": "选择的路径不是文件夹。",
-    "No Markdown files were found in this folder.": "这个文件夹中没有找到 Markdown 文件。",
-    "Book folder no longer exists.": "书籍文件夹不存在或已被移动。",
-    "Book root folder is missing.": "书籍根文件夹不存在或已被移动。",
-    "Book was not found.": "没有找到这本书。",
-    "Book name cannot be empty.": "书籍名称不能为空。",
-    "Chapter not found.": "没有找到章节。",
-    "Chapter source file no longer exists.": "章节源文件不存在或已被移动。",
-    "Current chapter version cannot be deleted. Switch to or create another current version first.":
-      "当前章节版本不能删除，请先切换或创建另一个当前版本。",
-    "Preset name cannot be empty.": "预设名称不能为空。",
-    "Backup path cannot be the active database file.": "备份路径不能是当前正在使用的数据库文件。",
-    "Auto backup path must be a folder.": "自动备份路径必须是文件夹。",
-    "Database lock is poisoned.": "数据库锁状态异常，请重启应用后再试。",
-    "Unknown annotation status.": "未知的批注状态。",
-    "Unknown export template.": "未知的导出模板。",
-  };
-  if (exactMessages[message]) return exactMessages[message];
-
-  const prefixes: Array<[string, string]> = [
-    ["Failed to open folder picker:", "打开文件夹选择器失败："],
-    ["Folder picker failed:", "文件夹选择器失败："],
-    ["Failed to open backup save dialog:", "打开备份保存窗口失败："],
-    ["Backup save dialog failed:", "备份保存窗口失败："],
-    ["Failed to open backup file dialog:", "打开备份文件窗口失败："],
-    ["Backup file dialog failed:", "备份文件窗口失败："],
-    ["Failed to open auto backup folder picker:", "打开自动备份文件夹选择器失败："],
-    ["Auto backup folder picker failed:", "自动备份文件夹选择器失败："],
-    ["Failed to create auto backup folder:", "创建自动备份文件夹失败："],
-    ["Failed to replace existing auto backup file:", "替换已有自动备份文件失败："],
-    ["Failed to create auto backup:", "创建自动备份失败："],
-    ["Failed to resolve folder path:", "解析文件夹路径失败："],
-    ["Failed to read book folder:", "读取书籍文件夹失败："],
-    ["Failed to read folder entry:", "读取文件夹条目失败："],
-    ["Failed to resolve chapter path:", "解析章节路径失败："],
-    ["Failed to open folder in Explorer:", "在资源管理器中打开文件夹失败："],
-    ["Failed to open chapter in Explorer:", "在资源管理器中打开章节失败："],
-    ["Failed to open chapter file:", "打开章节文件失败："],
-    ["Failed to open chapter folder:", "打开章节文件夹失败："],
-    ["Failed to open folder:", "打开文件夹失败："],
-    ["Failed to update pinned state:", "更新置顶状态失败："],
-    ["Failed to save chapter order:", "保存章节顺序失败："],
-    ["Failed to start chapter deletion:", "启动章节删除失败："],
-    ["Failed to delete chapter:", "删除章节失败："],
-    ["Failed to save chapter deletion:", "保存章节删除失败："],
-    ["Failed to update annotation:", "更新批注失败："],
-    ["Failed to update annotation status:", "更新批注状态失败："],
-    ["Failed to save annotation status:", "保存批注状态失败："],
-    ["Failed to update export preset:", "更新导出预设失败："],
-    ["Failed to export backup:", "导出备份失败："],
-    ["Failed to open backup database:", "打开备份数据库失败："],
-    ["Failed to restore backup:", "恢复备份失败："],
-    ["Failed to restore reading progress ratios:", "恢复阅读进度百分比失败："],
-    ["Failed to restore annotation anchors:", "恢复批注锚点失败："],
-    ["Failed to restore focus mode setting:", "恢复聚焦模式设置失败："],
-    ["Failed to restore slide annotation setting:", "恢复划动批注设置失败："],
-    ["Failed to restore theme series setting:", "恢复主题系列设置失败："],
-    ["Failed to restore pinned books:", "恢复置顶书籍失败："],
-    ["Failed to restore pinned annotations:", "恢复置顶批注失败："],
-    ["Failed to restore export presets:", "恢复导出预设失败："],
-    ["Failed to restore auto backup settings:", "恢复自动备份设置失败："],
-    ["Failed to update settings:", "更新设置失败："],
-    ["Failed to save reading progress:", "保存阅读进度失败："],
-    ["Failed to clear chapter reading progress:", "清除章节阅读进度失败："],
-    ["Failed to start import transaction:", "启动导入事务失败："],
-    ["Failed to create book:", "创建书籍失败："],
-    ["Failed to create chapter:", "创建章节失败："],
-    ["Failed to create chapter version:", "创建章节版本失败："],
-    ["Failed to finish import:", "完成导入失败："],
-    ["Failed to rename book:", "重命名书籍失败："],
-    ["Failed to read ", "读取文件失败："],
-    ["Failed to update renamed chapter:", "更新改名章节失败："],
-    ["Failed to add new chapter:", "添加新章节失败："],
-    ["Failed to add new chapter version:", "添加新章节版本失败："],
-    ["Failed to start version transaction:", "启动版本事务失败："],
-    ["Failed to update current chapter version:", "更新当前章节版本失败："],
-    ["Failed to save new chapter version:", "保存新章节版本失败："],
-    ["Book not found:", "没有找到书籍："],
-    ["Chapter not found:", "没有找到章节："],
-    ["Chapter version not found:", "没有找到章节版本："],
-    ["Chapter snapshot not found:", "没有找到章节快照："],
-    ["Export preset not found:", "没有找到导出预设："],
-    ["Annotation not found:", "没有找到批注："],
-    ["Database error:", "数据库错误："],
-  ];
-  for (const [prefix, translatedPrefix] of prefixes) {
-    if (message.startsWith(prefix)) {
-      return `${translatedPrefix}${message.slice(prefix.length).trimStart()}`;
-    }
-  }
-  return message;
-}
-
-function clamp(value: number, min: number, max: number) {
-  const upper = Math.max(min, max);
-  return Math.min(Math.max(value, min), upper);
-}
-
-function buildChapterProgressMap(progressItems: ReadingProgress[]) {
-  return progressItems.reduce<Record<string, ReadingProgress>>((map, item) => {
-    if (!map[item.chapterId]) {
-      map[item.chapterId] = item;
-    }
-    return map;
-  }, {});
-}
-
-function getScrollProgressRatio(element: HTMLElement) {
-  const maxScroll = element.scrollHeight - element.clientHeight;
-  if (maxScroll <= 1) return 1;
-  const remainingScroll = maxScroll - element.scrollTop;
-  const ratio = clamp(element.scrollTop / maxScroll, 0, 1);
-  return remainingScroll <= readingProgressCompleteRemainingPx ||
-    ratio >= readingProgressCompleteThreshold
-    ? 1
-    : ratio;
-}
-
-function isChapterProgressComplete(progress?: ReadingProgress) {
-  return Boolean(
-    progress && clamp(progress.progressRatio, 0, 1) >= readingProgressCompleteThreshold,
-  );
-}
-
-function ChapterProgressIcon({ progress }: { progress?: ReadingProgress }) {
-  if (!progress) return <FileText className="chapter-file-icon" size={15} aria-hidden="true" />;
-  const ratio = clamp(progress.progressRatio, 0, 1);
-  if (isChapterProgressComplete(progress)) {
-    return <Check className="chapter-progress-complete" size={15} aria-label="Completed" />;
-  }
-  const displayRatio = ratio > 0 ? ratio : progress.scrollTop > 0 ? 0.02 : 0;
-  const percent = Math.round(displayRatio * 100);
-  return (
-    <svg
-      className="chapter-progress-ring"
-      viewBox="0 0 18 18"
-      aria-label={`阅读进度 ${percent}%`}
-      style={
-        {
-          "--chapter-progress-offset": `${(43.98 * (1 - displayRatio)).toFixed(2)}`,
-        } as CSSProperties
-      }
-    >
-      <circle className="chapter-progress-track" cx="9" cy="9" r="7" />
-      <circle className="chapter-progress-value" cx="9" cy="9" r="7" />
-    </svg>
-  );
-}
-
-function isHomeImportDragBlocked() {
-  return Boolean(document.querySelector(".modal-backdrop, .settings-backdrop"));
-}
-
-function getInitialWindowPlacement(monitor: WindowPlacementMonitor | null): WindowPlacementBounds | null {
-  if (!monitor) return null;
-  const area = monitor.workArea;
-  const usableWidth = Math.max(1, area.size.width);
-  const usableHeight = Math.max(1, area.size.height);
-  const maxWidth = Math.max(minimumRestoredWindowSize, usableWidth - initialWindowEdgePaddingPx * 2);
-  const maxHeight = Math.max(minimumRestoredWindowSize, usableHeight - initialWindowEdgePaddingPx * 2);
-  const minWidth = Math.min(initialWindowMinWidth, maxWidth);
-  const minHeight = Math.min(initialWindowMinHeight, maxHeight);
-  const width = Math.round(clamp(usableWidth * initialWindowWidthRatio, minWidth, maxWidth));
-  const height = Math.round(clamp(usableHeight * initialWindowHeightRatio, minHeight, maxHeight));
-  return {
-    x: Math.round(area.position.x + (usableWidth - width) / 2),
-    y: Math.round(area.position.y + (usableHeight - height) / 2),
-    width,
-    height,
-  };
-}
-
-function readSavedWindowPlacement() {
-  try {
-    const storageKey = [windowPlacementStorageKey, ...legacyWindowPlacementStorageKeys].find((key) =>
-      localStorage.getItem(key),
-    );
-    if (!storageKey) return null;
-    const raw = localStorage.getItem(storageKey);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<SavedWindowPlacement>;
-    if (
-      typeof parsed.x !== "number" ||
-      typeof parsed.y !== "number" ||
-      typeof parsed.width !== "number" ||
-      typeof parsed.height !== "number" ||
-      parsed.width < minimumRestoredWindowSize ||
-      parsed.height < minimumRestoredWindowSize
-    ) {
-      return null;
-    }
-    return {
-      x: Math.round(parsed.x),
-      y: Math.round(parsed.y),
-      width: Math.round(parsed.width),
-      height: Math.round(parsed.height),
-      savedAt: typeof parsed.savedAt === "number" ? parsed.savedAt : Date.now(),
-    };
-  } catch {
-    return null;
-  }
-}
-
-function writeSavedWindowPlacement(placement: SavedWindowPlacement) {
-  localStorage.setItem(windowPlacementStorageKey, JSON.stringify(placement));
-  legacyWindowPlacementStorageKeys.forEach((key) => localStorage.removeItem(key));
-}
-
-function isWindowPlacementVisible(
-  placement: SavedWindowPlacement,
-  monitors: WindowPlacementMonitor[],
-) {
-  return monitors.some((monitor) => {
-    const area = monitor.workArea;
-    const left = area.position.x;
-    const top = area.position.y;
-    const right = left + area.size.width;
-    const bottom = top + area.size.height;
-    return (
-      placement.x + minimumRestoredWindowSize > left &&
-      placement.x < right - minimumRestoredWindowSize &&
-      placement.y + minimumRestoredWindowSize > top &&
-      placement.y < bottom - minimumRestoredWindowSize
-    );
-  });
-}
-
-function sortReaderAnnotations(annotations: Annotation[]) {
-  return [...annotations].sort((left, right) => {
-    if (left.isPinned !== right.isPinned) return left.isPinned ? -1 : 1;
-    if (left.startOffset !== right.startOffset) return left.startOffset - right.startOffset;
-    return left.createdAt.localeCompare(right.createdAt);
-  });
-}
-
-function getReadingStats(content: string) {
-  const plainText = content
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/`[^`]*`/g, " ")
-    .replace(/!\[[^\]]*]\([^)]*\)/g, " ")
-    .replace(/\[([^\]]*)]\([^)]*\)/g, "$1")
-    .replace(/[#>*_~\-|[\]()`]/g, " ");
-  const cjkCount = plainText.match(/[\u3400-\u9fff\uf900-\ufaff]/g)?.length ?? 0;
-  const latinWordCount =
-    plainText
-      .replace(/[\u3400-\u9fff\uf900-\ufaff]/g, " ")
-      .match(/[A-Za-z0-9]+(?:['-][A-Za-z0-9]+)*/g)?.length ?? 0;
-  const wordCount = cjkCount + latinWordCount;
-  return {
-    wordCount,
-    minutes: wordCount === 0 ? 0 : Math.max(1, Math.ceil(wordCount / 500)),
-  };
-}
-
-function buildChangeHighlights(
-  root: HTMLElement,
-  oldContent: string,
-  newContent: string,
-  chapterFilePath: string,
-) {
-  const rootText = getMarkdownReadableText(root);
-  if (!rootText || oldContent === newContent) return [];
-
-  const highlights: ChangeHighlight[] = [];
-  let searchCursor = 0;
-  for (const block of diffMarkdownLines(oldContent, newContent)) {
-    if ((block.type !== "added" && block.type !== "modified") || block.newLines.length === 0) {
-      continue;
-    }
-
-    const changedText = normalizeReadableChangeText(
-      renderMarkdownToReadableText(block.newLines.join("\n"), chapterFilePath),
-    );
-    if (!changedText) continue;
-
-    const startOffset = findReadableChangeOffset(rootText, changedText, searchCursor);
-    if (startOffset < 0) continue;
-
-    const endOffset = startOffset + changedText.length;
-    highlights.push({
-      id: block.id,
-      type: block.type,
-      startOffset,
-      endOffset,
-      changedText,
-    });
-    searchCursor = endOffset;
-  }
-
-  return highlights;
-}
-
-function normalizeReadableChangeText(value: string) {
-  return value.replace(/\u00a0/g, " ").trim();
-}
-
-function findReadableChangeOffset(rootText: string, changedText: string, preferredStart: number) {
-  const fromCursor = rootText.indexOf(changedText, preferredStart);
-  if (fromCursor >= 0) return fromCursor;
-  return rootText.indexOf(changedText);
-}
-
-function buildReaderSearchMatches(rootText: string, query: string) {
-  const trimmed = query.trim();
-  if (!trimmed) return [];
-
-  const haystack = rootText.toLowerCase();
-  const needle = trimmed.toLowerCase();
-  const matches: ReaderSearchMatch[] = [];
-  let cursor = 0;
-
-  while (cursor <= haystack.length && matches.length < 200) {
-    const index = haystack.indexOf(needle, cursor);
-    if (index < 0) break;
-    const endOffset = index + needle.length;
-    const matchedText = rootText.slice(index, endOffset);
-    matches.push({
-      id: `reader-search-${matches.length}-${index}`,
-      startOffset: index,
-      endOffset,
-      matchedText,
-      excerpt: buildReaderSearchExcerpt(rootText, index, endOffset),
-    });
-    cursor = Math.max(endOffset, index + 1);
-  }
-
-  return matches;
-}
-
-function buildReaderSearchExcerpt(rootText: string, startOffset: number, endOffset: number) {
-  const before = rootText.slice(Math.max(0, startOffset - 54), startOffset);
-  const match = rootText.slice(startOffset, endOffset);
-  const after = rootText.slice(endOffset, Math.min(rootText.length, endOffset + 86));
-  const prefix = startOffset > 54 ? "..." : "";
-  const suffix = endOffset + 86 < rootText.length ? "..." : "";
-  return collapseReaderSearchWhitespace(`${prefix}${before}${match}${after}${suffix}`);
-}
-
-function collapseReaderSearchWhitespace(value: string) {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-function composeLanguageFontStack(
-  latinAlias: string,
-  cjkAlias: string,
-  fallback: "sans-serif" | "serif",
-) {
-  return `${quoteCssString(latinAlias)}, ${quoteCssString(cjkAlias)}, ${fallback}`;
-}
-
-function createLanguageFontFace(alias: string, fontFamilyStack: string, script: "latin" | "cjk") {
-  const localSources = splitFontStack(fontFamilyStack)
-    .filter((family) => !isGenericFontFamily(family))
-    .map((family) => `local(${quoteCssString(stripFontQuotes(family))})`);
-
-  if (!localSources.length) return "";
-
-  const unicodeRange =
-    script === "latin"
-      ? "U+0000-024F, U+1E00-1EFF, U+2000-206F, U+2070-209F, U+20A0-20CF, U+2100-214F, U+2150-218F"
-      : "U+2E80-2EFF, U+2F00-2FDF, U+3000-303F, U+3040-30FF, U+3100-312F, U+31A0-31BF, U+31F0-31FF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FF00-FFEF, U+20000-2FA1F";
-
-  return [
-    "@font-face {",
-    `  font-family: ${quoteCssString(alias)};`,
-    `  src: ${localSources.join(", ")};`,
-    `  unicode-range: ${unicodeRange};`,
-    "  font-display: swap;",
-    "}",
-  ].join("\n");
-}
-
-function splitFontStack(value: string) {
-  const families: string[] = [];
-  let current = "";
-  let quote: string | null = null;
-  let escaped = false;
-
-  for (const character of value) {
-    if (escaped) {
-      current += character;
-      escaped = false;
-      continue;
-    }
-    if (character === "\\") {
-      current += character;
-      escaped = true;
-      continue;
-    }
-    if (quote) {
-      current += character;
-      if (character === quote) quote = null;
-      continue;
-    }
-    if (character === "\"" || character === "'") {
-      current += character;
-      quote = character;
-      continue;
-    }
-    if (character === ",") {
-      if (current.trim()) families.push(current.trim());
-      current = "";
-      continue;
-    }
-    current += character;
-  }
-
-  if (current.trim()) families.push(current.trim());
-  return families;
-}
-
-function isGenericFontFamily(family: string) {
-  return ["serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui"].includes(
-    stripFontQuotes(family).toLowerCase(),
-  );
-}
-
-function stripFontQuotes(value: string) {
-  const trimmed = value.trim();
-  if (trimmed.length >= 2) {
-    const first = trimmed[0];
-    const last = trimmed[trimmed.length - 1];
-    if ((first === "\"" && last === "\"") || (first === "'" && last === "'")) {
-      return trimmed.slice(1, -1).replace(/\\(["'\\])/g, "$1");
-    }
-  }
-  return trimmed;
-}
-
-function quoteCssString(value: string) {
-  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"").replace(/\n/g, "\\A ")}"`;
 }

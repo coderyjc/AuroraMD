@@ -1,38 +1,28 @@
 use futures_util::future::{select, Either};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use tauri::{Manager, PhysicalPosition, PhysicalSize, State};
+use tauri::{Manager, State};
 use tokio::sync::watch;
-#[cfg(target_os = "windows")]
-use windows::{
-    core::{w, HRESULT, PCWSTR, PWSTR},
-    Win32::{
-        Foundation::ERROR_CANCELLED,
-        System::Com::{
-            CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_INPROC_SERVER,
-            COINIT_APARTMENTTHREADED,
-        },
-        UI::Shell::{
-            Common::COMDLG_FILTERSPEC, FileOpenDialog, FileSaveDialog, IFileDialog,
-            IFileOpenDialog, IFileSaveDialog, IShellItem, SHCreateItemFromParsingName,
-            FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_NOCHANGEDIR, FOS_NOREADONLYRETURN,
-            FOS_OVERWRITEPROMPT, FOS_PATHMUSTEXIST, FOS_PICKFOLDERS, SIGDN_FILESYSPATH,
-        },
-    },
-};
-
 mod db;
 mod domain;
 mod exporter;
+mod font;
+mod platform;
 mod utils;
+mod window;
 
 use db::init_database;
 use domain::*;
 use exporter::render_export;
+use font::{collect_system_fonts, compose_font_family};
+use platform::{
+    open_external_url, open_file_location, open_folder_path, pick_auto_backup_directory_path,
+    pick_backup_open_path, pick_backup_save_path, pick_book_folder, pick_markdown_files,
+};
 use utils::{
     chapter_file_name_from_path, chapter_title_from_root, collect_rows, db_error, extract_outline,
     hash_content, is_markdown_path, new_id, now, path_to_string, repeat_placeholders,
@@ -51,12 +41,6 @@ struct AiRewriteCancelHandle {
     sender: watch::Sender<bool>,
 }
 
-const INITIAL_WINDOW_WIDTH_RATIO: f64 = 0.69;
-const INITIAL_WINDOW_HEIGHT_RATIO: f64 = 0.82;
-const INITIAL_WINDOW_MIN_WIDTH: u32 = 980;
-const INITIAL_WINDOW_MIN_HEIGHT: u32 = 680;
-const INITIAL_WINDOW_MIN_RESTORED_SIZE: u32 = 360;
-const INITIAL_WINDOW_EDGE_PADDING: u32 = 32;
 const PROJECT_REPOSITORY_URL: &str = "https://github.com/coderyjc/AuroraMD";
 const READING_PROGRESS_COMPLETE_RATIO: f64 = 1.0;
 const READING_PROGRESS_COMPLETE_THRESHOLD: f64 = 0.995;
@@ -65,7 +49,7 @@ const READING_PROGRESS_COMPLETE_THRESHOLD: f64 = 0.995;
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            apply_initial_window_bounds(app);
+            window::apply_initial_window_bounds(app);
             let app_data_dir = app.path().app_data_dir()?;
             fs::create_dir_all(&app_data_dir)?;
             let db_path = app_data_dir.join("auroramd.sqlite3");
@@ -139,45 +123,6 @@ pub fn run() {
         .expect("failed to run AuroraMD");
 }
 
-fn apply_initial_window_bounds(app: &tauri::App) {
-    let Some(window) = app.get_webview_window("main") else {
-        return;
-    };
-    let Ok(Some(monitor)) = window.primary_monitor() else {
-        return;
-    };
-    let area = monitor.work_area();
-    let usable_width = area.size.width.max(1);
-    let usable_height = area.size.height.max(1);
-    let max_width = INITIAL_WINDOW_MIN_RESTORED_SIZE
-        .max(usable_width.saturating_sub(INITIAL_WINDOW_EDGE_PADDING * 2));
-    let max_height = INITIAL_WINDOW_MIN_RESTORED_SIZE
-        .max(usable_height.saturating_sub(INITIAL_WINDOW_EDGE_PADDING * 2));
-    let min_width = INITIAL_WINDOW_MIN_WIDTH.min(max_width);
-    let min_height = INITIAL_WINDOW_MIN_HEIGHT.min(max_height);
-    let width = clamp_f64(
-        usable_width as f64 * INITIAL_WINDOW_WIDTH_RATIO,
-        min_width as f64,
-        max_width as f64,
-    )
-    .round() as u32;
-    let height = clamp_f64(
-        usable_height as f64 * INITIAL_WINDOW_HEIGHT_RATIO,
-        min_height as f64,
-        max_height as f64,
-    )
-    .round() as u32;
-    let x = area.position.x + (usable_width as i32 - width as i32) / 2;
-    let y = area.position.y + (usable_height as i32 - height as i32) / 2;
-    let _ = window.set_size(PhysicalSize::new(width, height));
-    let _ = window.set_position(PhysicalPosition::new(x, y));
-}
-
-fn clamp_f64(value: f64, min: f64, max: f64) -> f64 {
-    let upper = min.max(max);
-    value.max(min).min(upper)
-}
-
 fn migrate_legacy_database(app_data_dir: &Path, db_path: &Path) {
     if db_path.exists() {
         return;
@@ -203,487 +148,6 @@ fn migrate_legacy_database(app_data_dir: &Path, db_path: &Path) {
             let _ = fs::copy(legacy_path, db_path);
             break;
         }
-    }
-}
-
-#[tauri::command]
-fn pick_book_folder() -> AppResult<Option<String>> {
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-
-        let script = r#"
-[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
-Add-Type -AssemblyName System.Windows.Forms
-$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-$dialog.Description = 'Select a Markdown book folder'
-$dialog.ShowNewFolderButton = $false
-if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-  [Console]::Out.Write($dialog.SelectedPath)
-}
-"#;
-        let output = std::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-STA", "-Command", script])
-            .creation_flags(0x08000000)
-            .output()
-            .map_err(|error| format!("Failed to open folder picker: {error}"))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("Folder picker failed: {stderr}"));
-        }
-
-        let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if selected.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(selected))
-        }
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        Ok(None)
-    }
-}
-
-#[tauri::command]
-fn pick_markdown_files() -> AppResult<Vec<String>> {
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-
-        let script = r#"
-[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
-Add-Type -AssemblyName System.Windows.Forms
-$dialog = New-Object System.Windows.Forms.OpenFileDialog
-$dialog.Title = 'Select Markdown files'
-$dialog.Filter = 'Markdown files (*.md)|*.md'
-$dialog.Multiselect = $true
-if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-  [Console]::Out.Write((ConvertTo-Json -InputObject @($dialog.FileNames) -Compress))
-}
-"#;
-        let output = std::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-STA", "-Command", script])
-            .creation_flags(0x08000000)
-            .output()
-            .map_err(|error| format!("Failed to open Markdown file picker: {error}"))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("Markdown file picker failed: {stderr}"));
-        }
-
-        let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if selected.is_empty() {
-            return Ok(Vec::new());
-        }
-        parse_selected_path_list(&selected)
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        Ok(Vec::new())
-    }
-}
-
-fn parse_selected_path_list(raw: &str) -> AppResult<Vec<String>> {
-    let selected = raw.trim().trim_start_matches('\u{feff}');
-    if selected.is_empty() {
-        return Ok(Vec::new());
-    }
-    if let Ok(paths) = serde_json::from_str::<Vec<String>>(selected) {
-        return Ok(paths);
-    }
-    serde_json::from_str::<String>(selected)
-        .map(|path| vec![path])
-        .map_err(|error| format!("Failed to read selected Markdown files: {error}"))
-}
-
-fn open_folder_path(path: &PathBuf) -> AppResult<()> {
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-
-        std::process::Command::new("explorer.exe")
-            .arg(path)
-            .creation_flags(0x08000000)
-            .spawn()
-            .map_err(|error| format!("Failed to open folder in Explorer: {error}"))?;
-        return Ok(());
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(path)
-            .spawn()
-            .map_err(|error| format!("Failed to open folder: {error}"))?;
-        return Ok(());
-    }
-
-    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(path)
-            .spawn()
-            .map_err(|error| format!("Failed to open folder: {error}"))?;
-        Ok(())
-    }
-}
-
-fn open_file_location(path: &PathBuf) -> AppResult<()> {
-    if !path.is_file() {
-        return Err("Chapter source file no longer exists.".to_string());
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-
-        std::process::Command::new("explorer.exe")
-            .arg(format!("/select,{}", path.to_string_lossy()))
-            .creation_flags(0x08000000)
-            .spawn()
-            .map_err(|error| format!("Failed to open chapter in Explorer: {error}"))?;
-        return Ok(());
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg("-R")
-            .arg(path)
-            .spawn()
-            .map_err(|error| format!("Failed to open chapter file: {error}"))?;
-        return Ok(());
-    }
-
-    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-    {
-        let parent = path
-            .parent()
-            .ok_or_else(|| "Chapter source folder no longer exists.".to_string())?;
-        std::process::Command::new("xdg-open")
-            .arg(parent)
-            .spawn()
-            .map_err(|error| format!("Failed to open chapter folder: {error}"))?;
-        Ok(())
-    }
-}
-
-fn open_external_url(url: &str) -> AppResult<()> {
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-
-        std::process::Command::new("cmd.exe")
-            .args(["/C", "start", "", url])
-            .creation_flags(0x08000000)
-            .spawn()
-            .map_err(|error| format!("Failed to open external link: {error}"))?;
-        return Ok(());
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(url)
-            .spawn()
-            .map_err(|error| format!("Failed to open external link: {error}"))?;
-        return Ok(());
-    }
-
-    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(url)
-            .spawn()
-            .map_err(|error| format!("Failed to open external link: {error}"))?;
-        Ok(())
-    }
-}
-
-fn pick_backup_save_path() -> AppResult<Option<PathBuf>> {
-    #[cfg(target_os = "windows")]
-    {
-        let timestamp = now()
-            .chars()
-            .filter(|char| char.is_ascii_digit())
-            .take(14)
-            .collect::<String>();
-        let default_name = format!("auroramd-backup-{timestamp}.sqlite3");
-        pick_windows_save_file("Export AuroraMD backup", &default_name)
-            .map_err(|error| format!("Failed to open backup save dialog: {error}"))
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        Ok(None)
-    }
-}
-
-fn pick_backup_open_path() -> AppResult<Option<PathBuf>> {
-    #[cfg(target_os = "windows")]
-    {
-        pick_windows_open_file("Restore AuroraMD backup")
-            .map_err(|error| format!("Failed to open backup file dialog: {error}"))
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        Ok(None)
-    }
-}
-
-fn pick_auto_backup_directory_path() -> AppResult<Option<PathBuf>> {
-    #[cfg(target_os = "windows")]
-    {
-        pick_windows_folder("Select AuroraMD automatic backup folder", None)
-            .map_err(|error| format!("Failed to open auto backup folder picker: {error}"))
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        Ok(None)
-    }
-}
-
-#[cfg(target_os = "windows")]
-struct WindowsComGuard;
-
-#[cfg(target_os = "windows")]
-impl Drop for WindowsComGuard {
-    fn drop(&mut self) {
-        unsafe {
-            CoUninitialize();
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn init_windows_dialog_com() -> AppResult<WindowsComGuard> {
-    unsafe {
-        CoInitializeEx(None, COINIT_APARTMENTTHREADED)
-            .ok()
-            .map_err(|error| format!("Failed to initialize Windows dialog: {error}"))?;
-    }
-    Ok(WindowsComGuard)
-}
-
-#[cfg(target_os = "windows")]
-fn pick_windows_save_file(title: &str, default_name: &str) -> AppResult<Option<PathBuf>> {
-    let title = title.to_string();
-    let default_name = default_name.to_string();
-    std::thread::spawn(move || pick_windows_save_file_on_sta(&title, &default_name))
-        .join()
-        .map_err(|_| "Windows save dialog thread panicked.".to_string())?
-}
-
-#[cfg(target_os = "windows")]
-fn pick_windows_save_file_on_sta(title: &str, default_name: &str) -> AppResult<Option<PathBuf>> {
-    unsafe {
-        let _com_guard = init_windows_dialog_com()?;
-        let dialog: IFileSaveDialog = CoCreateInstance(&FileSaveDialog, None, CLSCTX_INPROC_SERVER)
-            .map_err(|error| format!("Failed to create Windows save dialog: {error}"))?;
-        let options = dialog
-            .GetOptions()
-            .map_err(|error| format!("Failed to read Windows save dialog options: {error}"))?;
-        dialog
-            .SetOptions(
-                options
-                    | FOS_FORCEFILESYSTEM
-                    | FOS_PATHMUSTEXIST
-                    | FOS_NOCHANGEDIR
-                    | FOS_OVERWRITEPROMPT
-                    | FOS_NOREADONLYRETURN,
-            )
-            .map_err(|error| format!("Failed to configure Windows save dialog: {error}"))?;
-        configure_backup_file_dialog(&dialog, title)?;
-        let default_name_wide = str_to_wide_null(default_name);
-        dialog
-            .SetFileName(PCWSTR(default_name_wide.as_ptr()))
-            .map_err(|error| format!("Failed to set backup file name: {error}"))?;
-        dialog
-            .SetDefaultExtension(w!("sqlite3"))
-            .map_err(|error| format!("Failed to set backup file extension: {error}"))?;
-
-        if let Err(error) = dialog.Show(None) {
-            if error.code() == HRESULT::from_win32(ERROR_CANCELLED.0) {
-                return Ok(None);
-            }
-            return Err(format!("Windows save dialog failed: {error}"));
-        }
-
-        let result = dialog
-            .GetResult()
-            .map_err(|error| format!("Failed to read selected backup file: {error}"))?;
-        shell_item_to_path(&result, "selected backup file")
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn pick_windows_open_file(title: &str) -> AppResult<Option<PathBuf>> {
-    let title = title.to_string();
-    std::thread::spawn(move || pick_windows_open_file_on_sta(&title))
-        .join()
-        .map_err(|_| "Windows open dialog thread panicked.".to_string())?
-}
-
-#[cfg(target_os = "windows")]
-fn pick_windows_open_file_on_sta(title: &str) -> AppResult<Option<PathBuf>> {
-    unsafe {
-        let _com_guard = init_windows_dialog_com()?;
-        let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)
-            .map_err(|error| format!("Failed to create Windows open dialog: {error}"))?;
-        let options = dialog
-            .GetOptions()
-            .map_err(|error| format!("Failed to read Windows open dialog options: {error}"))?;
-        dialog
-            .SetOptions(
-                options
-                    | FOS_FORCEFILESYSTEM
-                    | FOS_FILEMUSTEXIST
-                    | FOS_PATHMUSTEXIST
-                    | FOS_NOCHANGEDIR,
-            )
-            .map_err(|error| format!("Failed to configure Windows open dialog: {error}"))?;
-        configure_backup_file_dialog(&dialog, title)?;
-
-        if let Err(error) = dialog.Show(None) {
-            if error.code() == HRESULT::from_win32(ERROR_CANCELLED.0) {
-                return Ok(None);
-            }
-            return Err(format!("Windows open dialog failed: {error}"));
-        }
-
-        let result = dialog
-            .GetResult()
-            .map_err(|error| format!("Failed to read selected backup file: {error}"))?;
-        shell_item_to_path(&result, "selected backup file")
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn configure_backup_file_dialog(dialog: &IFileDialog, title: &str) -> AppResult<()> {
-    unsafe {
-        let filters = [
-            COMDLG_FILTERSPEC {
-                pszName: w!("SQLite backup (*.sqlite3)"),
-                pszSpec: w!("*.sqlite3"),
-            },
-            COMDLG_FILTERSPEC {
-                pszName: w!("All files (*.*)"),
-                pszSpec: w!("*.*"),
-            },
-        ];
-        dialog
-            .SetFileTypes(&filters)
-            .map_err(|error| format!("Failed to set backup file filters: {error}"))?;
-        dialog
-            .SetFileTypeIndex(1)
-            .map_err(|error| format!("Failed to set backup file filter: {error}"))?;
-        let title_wide = str_to_wide_null(title);
-        dialog
-            .SetTitle(PCWSTR(title_wide.as_ptr()))
-            .map_err(|error| format!("Failed to set Windows dialog title: {error}"))?;
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
-fn pick_windows_folder(
-    title: &str,
-    initial_directory: Option<&Path>,
-) -> AppResult<Option<PathBuf>> {
-    let title = title.to_string();
-    let initial_directory = initial_directory.map(Path::to_path_buf);
-    std::thread::spawn(move || pick_windows_folder_on_sta(&title, initial_directory.as_deref()))
-        .join()
-        .map_err(|_| "Windows folder dialog thread panicked.".to_string())?
-}
-
-#[cfg(target_os = "windows")]
-fn pick_windows_folder_on_sta(
-    title: &str,
-    initial_directory: Option<&Path>,
-) -> AppResult<Option<PathBuf>> {
-    unsafe {
-        let _com_guard = init_windows_dialog_com()?;
-        let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)
-            .map_err(|error| format!("Failed to create Windows folder dialog: {error}"))?;
-        let options = dialog
-            .GetOptions()
-            .map_err(|error| format!("Failed to read Windows folder dialog options: {error}"))?;
-        dialog
-            .SetOptions(
-                options
-                    | FOS_PICKFOLDERS
-                    | FOS_FORCEFILESYSTEM
-                    | FOS_PATHMUSTEXIST
-                    | FOS_NOCHANGEDIR,
-            )
-            .map_err(|error| format!("Failed to configure Windows folder dialog: {error}"))?;
-        let title_wide = str_to_wide_null(title);
-        dialog
-            .SetTitle(PCWSTR(title_wide.as_ptr()))
-            .map_err(|error| format!("Failed to set Windows folder dialog title: {error}"))?;
-
-        if let Some(initial_directory) = initial_directory.filter(|path| path.exists()) {
-            let wide_path = path_to_wide_null(initial_directory);
-            let shell_item: IShellItem =
-                SHCreateItemFromParsingName(PCWSTR(wide_path.as_ptr()), None)
-                    .map_err(|error| format!("Failed to open initial folder: {error}"))?;
-            dialog
-                .SetFolder(&shell_item)
-                .map_err(|error| format!("Failed to set initial folder: {error}"))?;
-        }
-
-        if let Err(error) = dialog.Show(None) {
-            if error.code() == HRESULT::from_win32(ERROR_CANCELLED.0) {
-                return Ok(None);
-            }
-            return Err(format!("Windows folder dialog failed: {error}"));
-        }
-
-        let result = dialog
-            .GetResult()
-            .map_err(|error| format!("Failed to read selected folder: {error}"))?;
-        shell_item_to_path(&result, "selected folder")
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn shell_item_to_path(item: &IShellItem, label: &str) -> AppResult<Option<PathBuf>> {
-    unsafe {
-        let selected_path = item
-            .GetDisplayName(SIGDN_FILESYSPATH)
-            .map_err(|error| format!("Failed to read {label} path: {error}"))?;
-        let selected = pwstr_to_string_and_free(selected_path)
-            .map_err(|error| format!("Failed to decode {label} path: {error}"))?;
-        Ok(Some(PathBuf::from(selected)))
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn path_to_wide_null(path: &Path) -> Vec<u16> {
-    use std::os::windows::ffi::OsStrExt;
-
-    path.as_os_str().encode_wide().chain(Some(0)).collect()
-}
-
-#[cfg(target_os = "windows")]
-fn str_to_wide_null(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain(Some(0)).collect()
-}
-
-#[cfg(target_os = "windows")]
-fn pwstr_to_string_and_free(value: PWSTR) -> Result<String, std::string::FromUtf16Error> {
-    unsafe {
-        let result = value.to_string();
-        CoTaskMemFree(Some(value.as_ptr().cast()));
-        result
     }
 }
 
@@ -2022,8 +1486,7 @@ fn apply_ai_rewrite(
         return Err("章节源文件不存在，无法替换。".to_string());
     }
 
-    fs::write(&chapter_path, content)
-        .map_err(|error| format!("写入章节源文件失败：{error}"))?;
+    fs::write(&chapter_path, content).map_err(|error| format!("写入章节源文件失败：{error}"))?;
     ensure_current_chapter_version(&mut conn, &payload.chapter_id)?;
     let chapter = get_chapter_by_id(&conn, &payload.chapter_id)?;
     read_chapter_payload(&conn, &chapter.current_version_id)
@@ -2572,8 +2035,7 @@ fn restore_backup(state: State<AppState>) -> AppResult<BackupResult> {
         .map_err(|error| format!("Failed to restore home page size setting: {error}"))?;
     auto_backup_restore_result
         .map_err(|error| format!("Failed to restore auto backup settings: {error}"))?;
-    ai_config_restore_result
-        .map_err(|error| format!("Failed to restore AI settings: {error}"))?;
+    ai_config_restore_result.map_err(|error| format!("Failed to restore AI settings: {error}"))?;
     split_font_restore_result
         .map_err(|error| format!("Failed to restore font settings: {error}"))?;
     pinned_restore_result.map_err(|error| format!("Failed to restore pinned books: {error}"))?;
@@ -2687,12 +2149,9 @@ fn update_settings(patch: SettingsPatch, state: State<AppState>) -> AppResult<Ap
         .unwrap_or(current.auto_backup_directory)
         .trim()
         .to_string();
-    let next_ai_request_format = normalize_ai_request_format(
-        &patch
-            .ai_request_format
-            .unwrap_or(current.ai_request_format),
-    )
-    .to_string();
+    let next_ai_request_format =
+        normalize_ai_request_format(&patch.ai_request_format.unwrap_or(current.ai_request_format))
+            .to_string();
     let next_ai_base_url = patch
         .ai_base_url
         .unwrap_or(current.ai_base_url)
@@ -2803,7 +2262,10 @@ fn validate_ai_settings(settings: &AppSettings) -> AppResult<()> {
         || settings.ai_api_key.trim().is_empty()
         || settings.ai_model.trim().is_empty()
     {
-        return Err("还没有配置 AI API，请先到主页设置的 AI配置中填写 Base URL、API Key 和模型名称。".to_string());
+        return Err(
+            "还没有配置 AI API，请先到主页设置的 AI配置中填写 Base URL、API Key 和模型名称。"
+                .to_string(),
+        );
     }
     Ok(())
 }
@@ -2925,84 +2387,6 @@ fn truncate_error_body(value: &str) -> String {
     } else {
         collapsed
     }
-}
-
-fn compose_font_family(latin_font_family: &str, cjk_font_family: &str, fallback: &str) -> String {
-    let mut families = Vec::new();
-    for family in split_font_family_stack(latin_font_family)
-        .into_iter()
-        .chain(split_font_family_stack(cjk_font_family))
-    {
-        if is_generic_font_family(&family) {
-            continue;
-        }
-        let normalized = family.trim().to_string();
-        if normalized.is_empty() || families.iter().any(|item| item == &normalized) {
-            continue;
-        }
-        families.push(normalized);
-    }
-    families.push(fallback.to_string());
-    families.join(", ")
-}
-
-fn split_font_family_stack(value: &str) -> Vec<String> {
-    let mut families = Vec::new();
-    let mut current = String::new();
-    let mut quote: Option<char> = None;
-    let mut escaped = false;
-
-    for character in value.chars() {
-        if escaped {
-            current.push(character);
-            escaped = false;
-            continue;
-        }
-        if character == '\\' {
-            current.push(character);
-            escaped = true;
-            continue;
-        }
-        if let Some(quote_character) = quote {
-            current.push(character);
-            if character == quote_character {
-                quote = None;
-            }
-            continue;
-        }
-        if character == '"' || character == '\'' {
-            current.push(character);
-            quote = Some(character);
-            continue;
-        }
-        if character == ',' {
-            let trimmed = current.trim();
-            if !trimmed.is_empty() {
-                families.push(trimmed.to_string());
-            }
-            current.clear();
-            continue;
-        }
-        current.push(character);
-    }
-
-    let trimmed = current.trim();
-    if !trimmed.is_empty() {
-        families.push(trimmed.to_string());
-    }
-    families
-}
-
-fn is_generic_font_family(family: &str) -> bool {
-    matches!(
-        family
-            .trim()
-            .trim_matches('"')
-            .trim_matches('\'')
-            .to_ascii_lowercase()
-            .as_str(),
-        "serif" | "sans-serif" | "monospace" | "cursive" | "fantasy" | "system-ui"
-    )
 }
 
 #[tauri::command]
@@ -3134,7 +2518,7 @@ fn clear_chapter_reading_progress(chapter_id: String, state: State<AppState>) ->
 }
 
 fn normalize_reading_progress_ratio(progress_ratio: f64) -> f64 {
-    let clamped = clamp_f64(progress_ratio, 0.0, READING_PROGRESS_COMPLETE_RATIO);
+    let clamped = window::clamp_f64(progress_ratio, 0.0, READING_PROGRESS_COMPLETE_RATIO);
     if clamped >= READING_PROGRESS_COMPLETE_THRESHOLD {
         READING_PROGRESS_COMPLETE_RATIO
     } else {
@@ -3953,99 +3337,6 @@ fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
         },
     )
     .map_err(db_error)
-}
-
-fn collect_system_fonts() -> AppResult<Vec<SystemFont>> {
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-
-        let script = r#"
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$OutputEncoding = [System.Text.Encoding]::UTF8
-$ErrorActionPreference = 'SilentlyContinue'
-$names = New-Object System.Collections.Generic.List[string]
-$usedRegistryFallback = $false
-try {
-  Add-Type -AssemblyName System.Drawing
-  $collection = New-Object System.Drawing.Text.InstalledFontCollection
-  foreach ($family in $collection.Families) {
-    if ($family.Name) { $names.Add($family.Name) }
-  }
-} catch {}
-if ($names.Count -eq 0) {
-  $usedRegistryFallback = $true
-  $registryPaths = @(
-    'Registry::HKEY_CURRENT_USER\Software\Microsoft\Windows NT\CurrentVersion\Fonts',
-    'Registry::HKEY_LOCAL_MACHINE\Software\Microsoft\Windows NT\CurrentVersion\Fonts'
-  )
-  foreach ($path in $registryPaths) {
-    if (Test-Path $path) {
-      $item = Get-ItemProperty -Path $path
-      foreach ($property in $item.PSObject.Properties) {
-        if ($property.Name -notlike 'PS*') { $names.Add($property.Name) }
-      }
-    }
-  }
-}
-$stylePattern = '\s+(Regular|Italic|Bold|Bold Italic|Light|ExtraLight|SemiLight|Medium|SemiBold|DemiBold|ExtraBold|Black|Thin|Heavy|Condensed|Narrow|Oblique)$'
-$names |
-  ForEach-Object {
-    $clean = $_ -replace '\s*\((TrueType|OpenType|Type 1|Raster|Vector)\)\s*$', ''
-    if ($usedRegistryFallback) { $clean = $clean -replace $stylePattern, '' }
-    $clean
-  } |
-  Where-Object { $_ -and $_.Trim().Length -gt 0 } |
-  Sort-Object -Unique |
-  ForEach-Object { [Console]::Out.WriteLine($_.Trim()) }
-"#;
-
-        let output = std::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-Command", script])
-            .creation_flags(0x08000000)
-            .output()
-            .map_err(|error| format!("Failed to read system fonts: {error}"))?;
-
-        if !output.status.success() {
-            return Err(format!(
-                "Failed to read system fonts: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-
-        return Ok(normalize_system_fonts(
-            String::from_utf8_lossy(&output.stdout).lines(),
-        ));
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        Ok(normalize_system_fonts([
-            "Arial",
-            "Georgia",
-            "Helvetica",
-            "Times New Roman",
-            "Verdana",
-        ]))
-    }
-}
-
-fn normalize_system_fonts<'a, I>(font_names: I) -> Vec<SystemFont>
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    let mut families = BTreeSet::new();
-    for name in font_names {
-        let family = name.trim();
-        if !family.is_empty() {
-            families.insert(family.to_string());
-        }
-    }
-
-    families
-        .into_iter()
-        .map(|family| SystemFont { family })
-        .collect()
 }
 
 fn map_book(row: &rusqlite::Row<'_>) -> rusqlite::Result<Book> {

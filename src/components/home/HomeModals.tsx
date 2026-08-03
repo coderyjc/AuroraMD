@@ -27,9 +27,16 @@ import {
   visibleThemeSeriesOptions,
 } from "../../constants";
 import { FontPicker } from "../FontPicker";
-import { locateAnnotationInText } from "../../markdown";
+import { buildImportTree, ImportTreeRows, isMarkdownPath } from "./ImportTree";
+import {
+  VersionDiffView,
+  VersionRow,
+  buildVersionDiff,
+  formatUploadNotice,
+  formatVersionLabel,
+  type VersionDiffResult,
+} from "./VersionDiff";
 import type {
-  Annotation,
   AppSettings,
   AiRequestFormat,
   BackupResult,
@@ -44,15 +51,12 @@ import type {
   FolderSyncReport,
   HomeTableColumnKey,
   ImportBookPreview,
-  ImportPreviewFile,
   NoteItem,
-  ReadChapterResponse,
   ShortcutAction,
   SystemFont,
 } from "../../types";
 import { annotationStatusLabel } from "../../utils/annotations";
 import { chapterFileName } from "../../utils/chapters";
-import { type DiffBlock, diffMarkdownLines } from "../../utils/diff";
 import {
   composeHighlightColor,
   createHighlightPenbox,
@@ -91,13 +95,6 @@ type SearchResultItem =
   | ThemeSkinSearchResultItem;
 type SearchMode = "search" | "theme-series" | "theme";
 
-interface VersionDiffResult {
-  base: ReadChapterResponse;
-  target: ReadChapterResponse;
-  blocks: DiffBlock[];
-  annotationChecks: AnnotationLocationCheck[];
-}
-
 type HomeSettingsCategory = "appearance" | "features" | "shortcuts" | "prompts" | "backup" | "about";
 type HighlightPenboxEditorMode = "create" | "edit";
 type HighlightPenboxDraft = HighlightPenbox & { mode: HighlightPenboxEditorMode };
@@ -120,13 +117,6 @@ function parseHomeTableColumns(value: string): Record<HomeTableColumnKey, boolea
   }
 }
 
-interface AnnotationLocationCheck {
-  annotation: Annotation;
-  located: boolean;
-  targetStartOffset?: number;
-  method?: "source-offset" | "anchored-text";
-}
-
 const emptyExportPresetDraft: ExportPresetPayload = {
   name: "",
   baseTemplateId: "ai-pack",
@@ -142,14 +132,6 @@ const exportTemplateLabels: Record<ExportTemplate, string> = {
   "question-list": "问题清单模板",
   "annotation-index": "全书批注索引",
 };
-
-interface ImportTreeNode {
-  id: string;
-  name: string;
-  file?: ImportPreviewFile;
-  children: ImportTreeNode[];
-  filePaths: string[];
-}
 
 const themeOptions = [
   {
@@ -1941,157 +1923,6 @@ function HighlightColorSlot({
   );
 }
 
-function ImportTreeRows({
-  nodes,
-  level,
-  selectedSet,
-  onToggleFile,
-  onToggleGroup,
-}: {
-  nodes: ImportTreeNode[];
-  level: number;
-  selectedSet: Set<string>;
-  onToggleFile: (path: string, checked: boolean) => void;
-  onToggleGroup: (paths: string[], checked: boolean) => void;
-}) {
-  return (
-    <>
-      {nodes.map((node) => {
-        const isFile = Boolean(node.file);
-        const selectedChildren = node.filePaths.filter((path) => selectedSet.has(path)).length;
-        const checked = isFile
-          ? Boolean(node.file && selectedSet.has(node.file.path))
-          : selectedChildren === node.filePaths.length && node.filePaths.length > 0;
-        const indeterminate = !isFile && selectedChildren > 0 && selectedChildren < node.filePaths.length;
-        return (
-          <div key={node.id} role="treeitem" aria-selected={checked}>
-            <label
-              className={`import-tree-row ${isFile ? "file" : "folder"}`}
-              style={{ paddingLeft: `${12 + level * 18}px` }}
-            >
-              <TreeCheckbox
-                checked={checked}
-                indeterminate={indeterminate}
-                onChange={(nextChecked) =>
-                  node.file
-                    ? onToggleFile(node.file.path, nextChecked)
-                    : onToggleGroup(node.filePaths, nextChecked)
-                }
-              />
-              {isFile ? <FileText size={15} /> : <FolderOpen size={15} />}
-              <span>
-                <strong>{node.name}</strong>
-                {node.file ? (
-                  <small>{formatBytes(node.file.size)}</small>
-                ) : (
-                  <small>{node.filePaths.length} 个 Markdown 文件</small>
-                )}
-              </span>
-            </label>
-            {!isFile && node.children.length > 0 && (
-              <ImportTreeRows
-                nodes={node.children}
-                level={level + 1}
-                selectedSet={selectedSet}
-                onToggleFile={onToggleFile}
-                onToggleGroup={onToggleGroup}
-              />
-            )}
-          </div>
-        );
-      })}
-    </>
-  );
-}
-
-function TreeCheckbox({
-  checked,
-  indeterminate,
-  onChange,
-}: {
-  checked: boolean;
-  indeterminate: boolean;
-  onChange: (checked: boolean) => void;
-}) {
-  const ref = useRef<HTMLInputElement | null>(null);
-
-  useEffect(() => {
-    if (ref.current) {
-      ref.current.indeterminate = indeterminate;
-    }
-  }, [indeterminate]);
-
-  return (
-    <input
-      ref={ref}
-      type="checkbox"
-      checked={checked}
-      onChange={(event) => onChange(event.currentTarget.checked)}
-    />
-  );
-}
-
-function buildImportTree(files: ImportPreviewFile[]): ImportTreeNode {
-  const root: ImportTreeNode = {
-    id: "root",
-    name: "root",
-    children: [],
-    filePaths: files.map((file) => file.path),
-  };
-
-  for (const file of files) {
-    const parts = file.relativePath.split(/[\\/]+/).filter(Boolean);
-    let current = root;
-    parts.forEach((part, index) => {
-      const isLeaf = index === parts.length - 1;
-      if (isLeaf) {
-        current.children.push({
-          id: file.path,
-          name: part || file.name,
-          file,
-          children: [],
-          filePaths: [file.path],
-        });
-        return;
-      }
-      let next = current.children.find((child) => !child.file && child.name === part);
-      if (!next) {
-        next = {
-          id: `${current.id}/${part}`,
-          name: part,
-          children: [],
-          filePaths: [],
-        };
-        current.children.push(next);
-      }
-      next.filePaths.push(file.path);
-      current = next;
-    });
-  }
-
-  sortImportTree(root);
-  return root;
-}
-
-function sortImportTree(node: ImportTreeNode) {
-  node.children.sort((left, right) => {
-    if (left.file && !right.file) return 1;
-    if (!left.file && right.file) return -1;
-    return left.name.localeCompare(right.name, "zh-Hans-CN");
-  });
-  node.children.forEach(sortImportTree);
-}
-
-function formatBytes(value: number) {
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function isMarkdownPath(path: string) {
-  return path.toLowerCase().endsWith(".md");
-}
-
 function formatShortcutFromEvent(event: ReactKeyboardEvent) {
   const modifierKeys = new Set(["Control", "Shift", "Alt", "Meta"]);
   if (modifierKeys.has(event.key)) return "";
@@ -3182,214 +3013,6 @@ export function VersionManagerModal({
         />
       )}
     </div>
-  );
-}
-
-function buildVersionDiff(base: ReadChapterResponse, target: ReadChapterResponse): VersionDiffResult {
-  return {
-    base,
-    target,
-    blocks: diffMarkdownLines(base.content, target.content),
-    annotationChecks: base.annotations.map((annotation) => {
-      const location = locateAnnotationInText(target.content, annotation);
-      return {
-        annotation,
-        located: Boolean(location),
-        targetStartOffset: location?.startOffset,
-        method: location?.method,
-      };
-    }),
-  };
-}
-
-function VersionDiffView({
-  result,
-  baseVersion,
-  targetVersion,
-}: {
-  result: VersionDiffResult;
-  baseVersion: ChapterVersion | null;
-  targetVersion: ChapterVersion | null;
-}) {
-  const added = result.blocks.filter((block) => block.type === "added").length;
-  const removed = result.blocks.filter((block) => block.type === "removed").length;
-  const modified = result.blocks.filter((block) => block.type === "modified").length;
-  const locatedAnnotations = result.annotationChecks.filter((item) => item.located).length;
-
-  return (
-    <div className="version-diff-result">
-      <div className="diff-summary-grid">
-        <span>
-          <small>基准</small>
-          <strong>{baseVersion ? formatVersionLabel(baseVersion, result.base.chapter.currentVersionId) : "版本 A"}</strong>
-        </span>
-        <span>
-          <small>目标</small>
-          <strong>{targetVersion ? formatVersionLabel(targetVersion, result.target.chapter.currentVersionId) : "版本 B"}</strong>
-        </span>
-        <span>
-          <small>新增</small>
-          <strong>{added}</strong>
-        </span>
-        <span>
-          <small>删除</small>
-          <strong>{removed}</strong>
-        </span>
-        <span>
-          <small>修改</small>
-          <strong>{modified}</strong>
-        </span>
-        <span>
-          <small>批注定位</small>
-          <strong>
-            {locatedAnnotations}/{result.annotationChecks.length}
-          </strong>
-        </span>
-      </div>
-
-      <section className="diff-section">
-        <div className="diff-section-heading">
-          <strong>正文差异</strong>
-          <small>{result.blocks.length ? `${result.blocks.length} 个变化块` : "没有正文变化"}</small>
-        </div>
-        {result.blocks.length ? (
-          <div className="diff-block-list">
-            {result.blocks.map((block) => (
-              <DiffBlockCard key={block.id} block={block} />
-            ))}
-          </div>
-        ) : (
-          <p className="muted">两个版本的正文快照一致。</p>
-        )}
-      </section>
-
-      <section className="diff-section">
-        <div className="diff-section-heading">
-          <strong>批注定位</strong>
-          <small>检查基准版本批注能否在目标版本中找到同一段文本</small>
-        </div>
-        {result.annotationChecks.length ? (
-          <div className="annotation-location-list">
-            {result.annotationChecks.map((item) => (
-              <article key={item.annotation.id} className={item.located ? "located" : "lost"}>
-                <span className="annotation-dot" style={{ background: item.annotation.highlightColor }} />
-                <div>
-                  <strong>{item.located ? "仍可定位" : "无法定位"}</strong>
-                  <p>{item.annotation.selectedText}</p>
-                  <small>
-                    {item.located
-                      ? `${item.method === "source-offset" ? "原始偏移" : "上下文锚点"} · 目标位置 ${item.targetStartOffset}`
-                      : "目标版本中未稳定找到这段批注文本"}
-                    {item.annotation.comment.trim() ? ` · ${item.annotation.comment.trim()}` : ""}
-                  </small>
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <p className="muted">基准版本没有批注。</p>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function DiffBlockCard({ block }: { block: DiffBlock }) {
-  return (
-    <article className={`diff-block ${block.type}`}>
-      <header>
-        <strong>{diffBlockLabel(block.type)}</strong>
-        <small>
-          原 {block.oldStart} · 新 {block.newStart}
-        </small>
-      </header>
-      {block.type === "added" ? (
-        <DiffLines lines={block.newLines} prefix="+" />
-      ) : block.type === "removed" ? (
-        <DiffLines lines={block.oldLines} prefix="-" />
-      ) : (
-        <div className="modified-lines">
-          <DiffLines lines={block.oldLines} prefix="-" />
-          <DiffLines lines={block.newLines} prefix="+" />
-        </div>
-      )}
-    </article>
-  );
-}
-
-function DiffLines({ lines, prefix }: { lines: string[]; prefix: "+" | "-" }) {
-  return (
-    <pre className={prefix === "+" ? "added-lines" : "removed-lines"}>
-      {lines.map((line, index) => (
-        <code key={`${index}-${line}`}>
-          <span>{prefix}</span>
-          {line || " "}
-        </code>
-      ))}
-    </pre>
-  );
-}
-
-function diffBlockLabel(type: DiffBlock["type"]) {
-  const labels: Record<DiffBlock["type"], string> = {
-    added: "新增",
-    removed: "删除",
-    modified: "修改",
-  };
-  return labels[type];
-}
-
-function formatVersionLabel(version: ChapterVersion, currentVersionId?: string) {
-  const base = version.id === currentVersionId ? `当前版本 v${version.versionNumber}` : `v${version.versionNumber}`;
-  return version.label.trim() ? `${base} · ${version.label.trim()}` : base;
-}
-
-function formatUploadNotice(report: ChapterUploadReport) {
-  if (report.added > 0 && report.skipped > 0) {
-    return `已上传 ${report.added} 个章节，跳过 ${report.skipped} 个已存在文件。`;
-  }
-  if (report.added > 0) {
-    return `已上传 ${report.added} 个章节。`;
-  }
-  if (report.skipped > 0) {
-    return `没有新增章节，${report.skipped} 个文件已存在于这本书中。`;
-  }
-  return "没有新增章节。";
-}
-
-function VersionRow({
-  version,
-  isCurrent,
-  busy,
-  onSaveLabel,
-  onDelete,
-}: {
-  version: ChapterVersion;
-  isCurrent: boolean;
-  busy: boolean;
-  onSaveLabel: (version: ChapterVersion, label: string) => void;
-  onDelete: (version: ChapterVersion) => void;
-}) {
-  const [label, setLabel] = useState(version.label);
-
-  useEffect(() => {
-    setLabel(version.label);
-  }, [version.label]);
-
-  return (
-    <article className="version-row">
-      <div>
-        <strong>{isCurrent ? `当前版本 v${version.versionNumber}` : `v${version.versionNumber}`}</strong>
-        <small>{new Date(version.createdAt).toLocaleString()}</small>
-      </div>
-      <input value={label} onChange={(event) => setLabel(event.target.value)} placeholder="版本别名，例如 初稿" />
-      <button onClick={() => onSaveLabel(version, label)} disabled={busy}>
-        <Save size={15} /> 保存
-      </button>
-      <button className="danger" onClick={() => onDelete(version)} disabled={busy || isCurrent}>
-        <Trash2 size={15} /> 删除
-      </button>
-    </article>
   );
 }
 
